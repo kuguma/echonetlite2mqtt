@@ -83,7 +83,7 @@ export class MqttController
           const bodyText = payload.toString();
           const newValue = this.parseValueFromText(bodyText, property.schema.data);
 
-          await this.firePropertyChnagedEvent(deviceId, propertyName, newValue, HoldOption.empty);
+          await this.firePropertyChangedEvent(deviceId, propertyName, newValue, HoldOption.empty);
         }
       }
       // request
@@ -171,7 +171,7 @@ export class MqttController
             }
 
             const newValue = this.parseValueFromText(propertyBodyText, property.schema.data);
-            await this.firePropertyChnagedEvent(deviceId, propertyName, newValue, holdOption);
+            await this.firePropertyChangedEvent(deviceId, propertyName, newValue, holdOption);
           }
         }
       }
@@ -228,10 +228,10 @@ export class MqttController
 
 
   propertyChangedEventListeners:((deviceId:string, propertyName:string, value:any, holdOption:HoldOption)=>Promise<void>)[]=[];
-  addPropertyChnagedEvent = (event:(deviceId:string, propertyName:string, value:any, holdOption:HoldOption)=>Promise<void>):void =>{
+  addPropertyChangedEvent = (event:(deviceId:string, propertyName:string, value:any, holdOption:HoldOption)=>Promise<void>):void =>{
     this.propertyChangedEventListeners.push(event);
   };
-  firePropertyChnagedEvent = async (deviceId:string, propertyName:string, value:any, holdOption:HoldOption):Promise<void>=>{
+  firePropertyChangedEvent = async (deviceId:string, propertyName:string, value:any, holdOption:HoldOption):Promise<void>=>{
     for(const listener of this.propertyChangedEventListeners)
     {
       await listener(deviceId, propertyName, value, holdOption);

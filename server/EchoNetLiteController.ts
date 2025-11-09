@@ -76,7 +76,7 @@ export class EchoNetLiteController{
     });
 
     this.echonetLiteRawController.addDeviceDetectedEvent(this.deviceDetected);
-    this.echonetLiteRawController.addPropertyChangedHandler(this.propertyChnaged);
+    this.echonetLiteRawController.addPropertyChangedHandler(this.propertyChanged);
 
     // コントローラー
     this.controllerDeviceDefine = {
@@ -95,7 +95,7 @@ export class EchoNetLiteController{
     };
   }
 
-  private propertyChnaged = (ip:string, eoj:string, epc:string, oldValue:string, newValue:string):void=>
+  private propertyChanged = (ip:string, eoj:string, epc:string, oldValue:string, newValue:string):void=>
   {
     const property = this.deviceConverter.getPropertyWithEpc(ip, eoj, epc);
     if(property===undefined){
@@ -107,7 +107,7 @@ export class EchoNetLiteController{
     {
       return;
     }
-    this.firePropertyChnagedEvent(ip, eoj, property.name, value);
+    this.firePropertyChangedEvent(ip, eoj, property.name, value);
   }
   
   // ノード単位で見つかったデバイスのEOJリストが通知されるので
@@ -243,14 +243,14 @@ export class EchoNetLiteController{
     }
   });
 
-  propertyChnagedListeners:((ip:string, eoj:string, propertyName:string, newValue:any)=>void)[] = [];
-  addPropertyChnagedEvent = (event:(ip:string, eoj:string, propertyName:string, newValue:any)=>void)=>
+  propertyChangedListeners:((ip:string, eoj:string, propertyName:string, newValue:any)=>void)[] = [];
+  addPropertyChangedEvent = (event:(ip:string, eoj:string, propertyName:string, newValue:any)=>void)=>
   {
-    this.propertyChnagedListeners.push(event);
+    this.propertyChangedListeners.push(event);
   }
-  firePropertyChnagedEvent = (ip:string, eoj:string, propertyName:string, newValue:any):void=>
+  firePropertyChangedEvent = (ip:string, eoj:string, propertyName:string, newValue:any):void=>
   {
-    this.propertyChnagedListeners.forEach((_)=>_(ip, eoj, propertyName, newValue));
+    this.propertyChangedListeners.forEach((_)=>_(ip, eoj, propertyName, newValue));
   }
   
   deviceDetectedListeners:((device:Device)=>void)[] = [];
@@ -364,7 +364,7 @@ export class EchoNetLiteController{
         {
           return;
         }
-        this.firePropertyChnagedEvent(id.ip, id.eoj, property.name, value);
+        this.firePropertyChangedEvent(id.ip, id.eoj, property.name, value);
         this.holdController.receivedProperty(id, property.name, value);
       }
 
@@ -450,7 +450,7 @@ export class EchoNetLiteController{
       {
         return;
       }
-      this.firePropertyChnagedEvent(id.ip, id.eoj, property.name, value);
+      this.firePropertyChangedEvent(id.ip, id.eoj, property.name, value);
     }
   }
 

@@ -683,7 +683,7 @@ echoNetListController.addDeviceUpdatedEvent((currentDevice:Device, newDevice:Dev
   restApiController.setNewEvent();
 });
 
-echoNetListController.addPropertyChnagedEvent((ip:string, eoj:string, propertyName:string, newValue:any):void =>{
+echoNetListController.addPropertyChangedEvent((ip:string, eoj:string, propertyName:string, newValue:any):void =>{
   
   if(newValue === undefined)
   {
@@ -750,7 +750,7 @@ restApiController.addPropertyRequestedRequestEvent(async (deviceId:string, prope
 });
 
 const mqttController = new MqttController(deviceStore, mqttBroker, mqttOption, mqttBaseTopic);
-mqttController.addPropertyChnagedEvent(async (deviceId:string, propertyName:string, value:any, holdOption:HoldOption):Promise<void>=>{
+mqttController.addPropertyChangedEvent(async (deviceId:string, propertyName:string, value:any, holdOption:HoldOption):Promise<void>=>{
   const device = deviceStore.getFromNameOrId(deviceId);
   if(device === undefined){
     logger.output('[MQTT] device not found : ' + deviceId)
