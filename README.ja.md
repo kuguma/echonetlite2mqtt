@@ -146,6 +146,12 @@ MQTT オプション
 | `MQTT_BASE_TOPIC`    | `--MqttBaseTopic`  | MQTTトピックのプレフィックスを指定します。(デフォルト:"echonetlite2mqtt/elapi/v2/devices") |
 
 
+ログオプション
+
+|  環境変数 | コマンドライン引数 | 説明 |
+| ------------------     | --------------------- | ----------- |
+| `ECHONET_LOG_LEVEL` | (なし) | ログレベルを指定します。error, warn, info, debug のいずれかを指定できます。 (デフォルト: info) |
+
 REST API オプション
 
 |  環境変数 | コマンドライン引数 | 説明 |

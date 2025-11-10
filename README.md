@@ -151,6 +151,12 @@ MQTT Options
 | `MQTT_BASE_TOPIC`    | `--MqttBaseTopic`  | MQTT topic prefix. (Default:"echonetlite2mqtt/elapi/v2/devices") |
 
 
+Log Options
+
+|  Environment Variables | Commandline Parameter | Description |
+| ------------------     | --------------------- | ----------- |
+| `ECHONET_LOG_LEVEL` | (none) | Specify the log level. Can be one of: error, warn, info, debug. (Default: info) |
+
 REST API Options
 
 |  Environment Variables | Commandline Parameter | Description |
