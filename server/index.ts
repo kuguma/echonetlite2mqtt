@@ -220,7 +220,7 @@ if("MQTT_CLIENT_ID" in process.env && process.env.MQTT_CLIENT_ID !== undefined)
 
 if("ECHONET_INTERVAL_TO_GET_PROPERTIES" in process.env && process.env.ECHONET_INTERVAL_TO_GET_PROPERTIES !== undefined)
 {
-  Logger.warn("", `The ECHONET_ALT_MULTI_NIC_MODE option has been deprecated. This option is ignored.`);
+  Logger.warn("", `The ECHONET_INTERVAL_TO_GET_PROPERTIES option has been deprecated. This option is ignored.`);
 }
 if("ECHONET_ALT_MULTI_NIC_MODE" in process.env && process.env.ECHONET_ALT_MULTI_NIC_MODE !== undefined)
 {
