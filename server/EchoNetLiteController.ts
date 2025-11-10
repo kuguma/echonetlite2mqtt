@@ -7,6 +7,8 @@ import { HoldOption } from "./MqttController";
 import { ELSV } from "./EchoNetCommunicator";
 import { Logger } from "./Logger";
 
+import { PropertyRequestQueue } from "./PropertyRequestQueue";
+
 export type findDeviceCallback = (internalId:string)=>Device|undefined;
 
 export class EchoNetLiteController{
@@ -22,6 +24,7 @@ export class EchoNetLiteController{
   private readonly searchDevices:boolean;
   private readonly commandTimeout:number;
   private readonly findDeviceCallback:findDeviceCallback;
+  private readonly propertyRequestQueue:PropertyRequestQueue;
   constructor(usedIpByEchoNet:string,
     aliasOption: AliasOption,
     unknownAsError:boolean,
@@ -33,6 +36,7 @@ export class EchoNetLiteController{
     this.aliasOption = aliasOption;
     this.deviceConverter = new EchoNetDeviceConverter(this.aliasOption, unknownAsError);
     this.echonetLiteRawController = new EchoNetLiteRawController();
+    this.propertyRequestQueue = new PropertyRequestQueue(this.requestDevicePropertyInternal.bind(this));
     this.holdController = new EchoNetHoldController({request:this.requestDeviceProperty, set:this.setDevicePropertyPrivate, isBusy:()=>this.echonetLiteRawController.getSendQueueLength() >= 1});
     this.unknownAsError = unknownAsError;
     this.knownDeviceIpList = knownDeviceIpList;
@@ -395,9 +399,19 @@ export class EchoNetLiteController{
       await this.echonetLiteRawController.searchDevicesInNetwork();
       Logger.info("[ECHONETLite]", `done searching devices`);
     }
+
+    // プロパティリクエストキューを開始
+    this.propertyRequestQueue.start();
   }
 
   requestDeviceProperty = async (id:DeviceId, propertyName:string):Promise<void> =>
+  {
+    // リクエストをキューに追加（非ブロッキング）
+    this.propertyRequestQueue.enqueue(id, propertyName);
+  }
+
+  // 実際のプロパティリクエスト実行用の内部メソッド（キューから呼ばれる）
+  private requestDevicePropertyInternal = async (id:DeviceId, propertyName:string):Promise<void> =>
   {
     const property = this.deviceConverter.getProperty(id.ip, id.eoj, propertyName);
     if(property === undefined)
@@ -460,6 +474,7 @@ export class EchoNetLiteController{
     return {
       hold: this.holdController.getInternalStatus(),
       rawController: this.echonetLiteRawController.getInternalStatus(),
+      propertyRequestQueue: this.propertyRequestQueue.getStatus(),
     }
   }
 }

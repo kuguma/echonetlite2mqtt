@@ -724,7 +724,8 @@ restApiController.addPropertyRequestedRequestEvent(async (deviceId:string, prope
   logger.output(`[RESTAPI]     prop reuqest: ${deviceNameText} ${propertyName}`);
   eventRepository.newEvent(`LOG`);
 
-  await echoNetListController.requestDeviceProperty({id: deviceId, ip: device.ip, eoj:device.eoj, internalId:device.internalId}, propertyName);
+  // 非ブロッキング: 待機せずにリクエストをキューに追加
+  echoNetListController.requestDeviceProperty({id: deviceId, ip: device.ip, eoj:device.eoj, internalId:device.internalId}, propertyName);
 });
 
 const mqttController = new MqttController(deviceStore, mqttBroker, mqttOption, mqttBaseTopic);
@@ -767,7 +768,8 @@ mqttController.addPropertyRequestedEvent(async (deviceId:string, propertyName:st
   logger.output(`[MQTT]        prop reuqest: ${deviceNameText} ${propertyName}`);
   eventRepository.newEvent(`LOG`);
 
-  await echoNetListController.requestDeviceProperty({id: deviceId, ip: device.ip, eoj:device.eoj, internalId:device.internalId}, propertyName);
+  // 非ブロッキング: 待機せずにリクエストをキューに追加
+  echoNetListController.requestDeviceProperty({id: deviceId, ip: device.ip, eoj:device.eoj, internalId:device.internalId}, propertyName);
 });
 
 
