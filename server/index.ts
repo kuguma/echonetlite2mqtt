@@ -82,6 +82,8 @@ let echonetUnknownAsError = false;
 let echonetDeviceIpList = "";
 let echonetDisableAutoDeviceDiscovery = false;
 let echonetCommandTimeout = 3000;
+let echonetPropertyRequestRetryCount = 1;
+let echonetPropertyRequestRetryDelay = 0;
 let debugLog = false;
 let restApiPort = 3000;
 let restApiHost = "0.0.0.0";
@@ -139,7 +141,7 @@ if( "ECHONET_DISABLE_AUTO_DEVICE_DISCOVERY" in process.env &&
   }
 }
 
-if( "ECHONET_COMMAND_TIMEOUT" in process.env && 
+if( "ECHONET_COMMAND_TIMEOUT" in process.env &&
   process.env.ECHONET_COMMAND_TIMEOUT !== undefined)
 {
   const temp = process.env.ECHONET_COMMAND_TIMEOUT.replace(/^"/g, "").replace(/"$/g, "");
@@ -147,6 +149,28 @@ if( "ECHONET_COMMAND_TIMEOUT" in process.env &&
   if(isNaN(tempNo)===false)
   {
     echonetCommandTimeout = tempNo;
+  }
+}
+
+if( "ECHONET_PROPERTY_REQUEST_RETRY_COUNT" in process.env &&
+  process.env.ECHONET_PROPERTY_REQUEST_RETRY_COUNT !== undefined)
+{
+  const temp = process.env.ECHONET_PROPERTY_REQUEST_RETRY_COUNT.replace(/^"/g, "").replace(/"$/g, "");
+  const tempNo = Number(temp);
+  if(isNaN(tempNo)===false && tempNo >= 0)
+  {
+    echonetPropertyRequestRetryCount = tempNo;
+  }
+}
+
+if( "ECHONET_PROPERTY_REQUEST_RETRY_DELAY" in process.env &&
+  process.env.ECHONET_PROPERTY_REQUEST_RETRY_DELAY !== undefined)
+{
+  const temp = process.env.ECHONET_PROPERTY_REQUEST_RETRY_DELAY.replace(/^"/g, "").replace(/"$/g, "");
+  const tempNo = Number(temp);
+  if(isNaN(tempNo)===false && tempNo >= 0)
+  {
+    echonetPropertyRequestRetryDelay = tempNo;
   }
 }
 
@@ -371,6 +395,8 @@ logger.output(`echonetUnknownAsError=${echonetUnknownAsError}`);
 logger.output(`echonetDeviceIpList=${echonetDeviceIpList}`);
 logger.output(`echonetDisableAutoDeviceDiscovery=${echonetDisableAutoDeviceDiscovery}`);
 logger.output(`echonetCommandTimeout=${echonetCommandTimeout}`);
+logger.output(`echonetPropertyRequestRetryCount=${echonetPropertyRequestRetryCount}`);
+logger.output(`echonetPropertyRequestRetryDelay=${echonetPropertyRequestRetryDelay}`);
 logger.output(`debugLog=${debugLog}`);
 logger.output(`restApiPort=${restApiPort}`);
 logger.output(`restApiHost=${restApiHost}`);
@@ -623,7 +649,9 @@ const deviceStore = new DeviceStore();
 const echoNetListController = new EchoNetLiteController(networkAddressForEchonet,
   aliasOption, echonetUnknownAsError,
   knownDeviceIpList, echonetDisableAutoDeviceDiscovery===false, echonetCommandTimeout,
-  (internalId:string)=>deviceStore.getByInternalId(internalId));
+  (internalId:string)=>deviceStore.getByInternalId(internalId),
+  echonetPropertyRequestRetryCount,
+  echonetPropertyRequestRetryDelay);
 
 echoNetListController.addDeviceDetectedEvent((device:Device)=>{
   if(device === undefined)
