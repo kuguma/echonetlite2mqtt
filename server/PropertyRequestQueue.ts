@@ -33,6 +33,7 @@ export class PropertyRequestQueue {
   /**
    * プロパティリクエストをキューに追加（非ブロッキング）
    * リクエストはデバイスIPアドレスごとにグループ化されてシリアライズされる
+   * 同じデバイス（IP+EOJ）の同じプロパティのリクエストが既にキューにある場合はスキップ
    */
   public enqueue(id: DeviceId, propertyName: string): void {
     const deviceKey = id.ip;
@@ -42,9 +43,21 @@ export class PropertyRequestQueue {
     }
 
     const queue = this.queues.get(deviceKey)!;
+
+    // 重複チェック: 同じeojと同じpropertyNameのリクエストが既に存在するか
+    const isDuplicate = queue.some(req =>
+      req.id.eoj === id.eoj &&
+      req.propertyName === propertyName
+    );
+
+    if (isDuplicate) {
+      Logger.debug("[PropertyRequestQueue]", `Skipped duplicate request for ${deviceKey} (eoj: ${id.eoj}), property: ${propertyName}`);
+      return;
+    }
+
     queue.push({ id, propertyName });
 
-    Logger.debug("[PropertyRequestQueue]", `Enqueued request for ${deviceKey}, property: ${propertyName}, queue length: ${queue.length}`);
+    Logger.debug("[PropertyRequestQueue]", `Enqueued request for ${deviceKey} (eoj: ${id.eoj}), property: ${propertyName}, queue length: ${queue.length}`);
   }
 
   /**
