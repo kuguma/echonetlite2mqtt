@@ -126,9 +126,7 @@ declare module "echonet-lite" {
   function returner(
     bytes: Buffer,
     rinfo: rinfo,
-    userfunc:
-      | ((rinfo: rinfo, els: eldata) => void)
-      | ((rinfo: rinfo, els: eldata, e: any) => void)
+    userfunc: ((rinfo: rinfo, els: eldata, e: any) => void)
   );
   function renewFacilities(ip: string, els: eldata): void;
   function setObserveFacilities(interval: number, onChanged: () => void): void;
