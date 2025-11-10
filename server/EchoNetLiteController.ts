@@ -6,11 +6,12 @@ import { EchoNetHoldController } from "./EchoNetHoldController";
 import { HoldOption } from "./MqttController";
 import { ELSV } from "./EchoNetCommunicator";
 import { Logger } from "./Logger";
+import { PropertyRequestQueue } from "./PropertyRequestQueue";
 
 export type findDeviceCallback = (internalId:string)=>Device|undefined;
 
 export class EchoNetLiteController{
-  
+
   private readonly aliasOption: AliasOption;
   private readonly echonetLiteRawController:EchoNetLiteRawController;
   private readonly holdController:EchoNetHoldController;
@@ -23,6 +24,7 @@ export class EchoNetLiteController{
   private readonly searchDevices:boolean;
   private readonly commandTimeout:number;
   private readonly findDeviceCallback:findDeviceCallback;
+  private readonly propertyRequestQueue:PropertyRequestQueue;
   constructor(usedIpByEchoNet:string,  
     aliasOption: AliasOption, 
     legacyMultiNicMode:boolean, 
@@ -44,6 +46,7 @@ export class EchoNetLiteController{
     this.usedIpByEchoNet = usedIpByEchoNet;
     this.commandTimeout = commandTimeout;
     this.findDeviceCallback = findDeviceCallback;
+    this.propertyRequestQueue = new PropertyRequestQueue();
 
     this.echonetLiteRawController.addReveivedHandler(( rinfo:rinfo, els:eldata ):void=>{
       if(els.ESV === ELSV.SET_RES)
@@ -382,6 +385,9 @@ export class EchoNetLiteController{
 
     this.controllerDeviceDefine['05ff01']['83'] = this.echonetLiteRawController.updateidentifierFromMacAddress(this.controllerDeviceDefine['05ff01']['83']);
 
+    // プロパティリクエストキューコントローラーを開始
+    this.propertyRequestQueue.start();
+
     await (new Promise<void>((resolve)=>setTimeout(()=>resolve(), 1000)));
 
     if(this.knownDeviceIpList.length > 0)
@@ -401,12 +407,26 @@ export class EchoNetLiteController{
     }
   }
 
-  requestDeviceProperty = async (id:DeviceId, propertyName:string):Promise<void> =>
+  /**
+   * プロパティリクエストをキューに追加
+   * 呼び出し側はレスポンスを待たずにリクエストをキューに追加する
+   */
+  requestDeviceProperty = (id:DeviceId, propertyName:string):void =>
+  {
+    this.propertyRequestQueue.enqueue(id, propertyName, async () => {
+      await this.requestDevicePropertyDirect(id, propertyName);
+    });
+  }
+
+  /**
+   * プロパティリクエストを直接実行（キューから呼ばれる）
+   */
+  private requestDevicePropertyDirect = async (id:DeviceId, propertyName:string):Promise<void> =>
   {
     const property = this.deviceConverter.getProperty(id.ip, id.eoj, propertyName);
     if(property === undefined)
     {
-      Logger.warn("[ECHONETLite]", `setDeviceProperty property === undefined propertyName=${propertyName}`);
+      Logger.warn("[ECHONETLite]", `requestDeviceProperty property === undefined propertyName=${propertyName}`);
       return;
     }
 
@@ -415,33 +435,20 @@ export class EchoNetLiteController{
     {
       epc = epc.replace(/^0x/gi, "");
     }
-    let res = await this.echonetLiteRawController.execPromise({
-      ip:id.ip, 
-      seoj:"05ff01", 
-      deoj:id.eoj, 
-      esv: ELSV.GET, 
-      epc, 
+    const res = await this.echonetLiteRawController.execPromise({
+      ip:id.ip,
+      seoj:"05ff01",
+      deoj:id.eoj,
+      esv: ELSV.GET,
+      epc,
       edt:"",
       tid:""});
-    let response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && (epc in _.els.DETAILs));
-    if(response === undefined)
-    {
-      // リトライする
-      Logger.warn("[ECHONETLite]", `requestDeviceProperty: retry get property value. epc=${epc}`, {responses:res.responses, command:res.command});
-      res = await this.echonetLiteRawController.execPromise({
-        ip:id.ip, 
-        seoj:"05ff01", 
-        deoj:id.eoj, 
-        esv: ELSV.GET, 
-        epc, 
-        edt:"",
-        tid:""});
-      response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && (epc in _.els.DETAILs));
-    }
+    const response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && (epc in _.els.DETAILs));
     if(response === undefined)
     {
       Logger.warn("[ECHONETLite]", `requestDeviceProperty: cannot get property value. epc=${epc}`, {responses:res.responses, command:res.command});
-      return;
+      // エラーを投げることで、キューがリトライを処理する
+      throw new Error(`Failed to get property value for ${id.ip} ${id.eoj} ${propertyName}`);
     }
 
     {
@@ -464,6 +471,7 @@ export class EchoNetLiteController{
     return {
       hold: this.holdController.getInternalStatus(),
       rawController: this.echonetLiteRawController.getInternalStatus(),
+      propertyRequestQueue: this.propertyRequestQueue.getInternalStatus(),
     }
   }
 }
