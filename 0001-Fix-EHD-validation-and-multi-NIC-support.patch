@@ -1,0 +1,55 @@
+From 2bbe6225852a3f4fde0c15ea1524eb64a4b53e32 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 10 Nov 2025 04:46:10 +0000
+Subject: [PATCH] Fix EHD validation and multi-NIC support
+
+- Add EHD1/EHD2 validation before parsing packets
+  Reject packets with invalid EHD (not 1081 or 1082) to prevent
+  processing of non-compliant ECHONET Lite packets
+  Fixes issue #4 in echonetlite2mqtt
+
+- Add multi-NIC support for IPv4
+  Pass interface address as second argument to addMembership()
+  for IPv4, matching existing IPv6 implementation
+---
+ index.js | 16 +++++++++++++---
+ 1 file changed, 13 insertions(+), 3 deletions(-)
+
+diff --git a/index.js b/index.js
+index 902bc04..7aacef5 100755
+--- a/index.js
++++ b/index.js
+@@ -177,7 +177,7 @@ EL.initialize = function (objList, userfunc, ipVer = 4, Options = {v4: '', v6: '
+ 	if( EL.ipVer == 0 || EL.ipVer == 4) {
+ 		EL.sock4.bind( {'address': '0.0.0.0', 'port': EL.EL_port}, function () {
+ 			EL.sock4.setMulticastLoopback(true);
+-			EL.sock4.addMembership(EL.EL_Multi);
++			EL.sock4.addMembership(EL.EL_Multi, EL.usingIF.v4);  // マルチNIC対応：第2引数で受信NICを指定
+ 		});
+ 	}
+ 	if( EL.ipVer == 0 || EL.ipVer == 6) {
+@@ -461,9 +461,19 @@ EL.parseBytes = function (bytes) {
+ // 16進数で表現された文字列をいれるとELDATA形式にする
+ EL.parseString = function (str) {
+ 	let eldata = {};
+-	if( str.substr(0, 4) == '1082' ) {  // 任意電文形式, arbitrary message format
++
++	// EHD1/EHD2のバリデーション（パース前にチェック）
++	// ECHONET Lite規格では、EHD1=0x10, EHD2=0x81または0x82が有効
++	const ehd = str.substr(0, 4);
++	if( ehd != '1081' && ehd != '1082' ) {
++		// 無効なECHONET Liteパケット
++		console.error("## EL.parseString error. Invalid EHD (expected 1081 or 1082): " + ehd);
++		return null;
++	}
++
++	if( ehd == '1082' ) {  // 任意電文形式, arbitrary message format
+ 		eldata = {
+-			'EHD': str.substr(0, 4),
++			'EHD': ehd,
+ 			'AMF': str.substr(4)
+ 		}
+ 		return (eldata);
+-- 
+2.43.0
+
