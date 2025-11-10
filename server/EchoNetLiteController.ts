@@ -7,6 +7,8 @@ import { HoldOption } from "./MqttController";
 import { ELSV } from "./EchoNetCommunicator";
 import { Logger } from "./Logger";
 
+import { PropertyRequestQueue } from "./PropertyRequestQueue";
+
 export type findDeviceCallback = (internalId:string)=>Device|undefined;
 
 export class EchoNetLiteController{
@@ -22,17 +24,23 @@ export class EchoNetLiteController{
   private readonly searchDevices:boolean;
   private readonly commandTimeout:number;
   private readonly findDeviceCallback:findDeviceCallback;
+  private readonly propertyRequestQueue:PropertyRequestQueue;
+  private readonly propertyRequestRetryCount:number;
+  private readonly propertyRequestRetryDelay:number;
   constructor(usedIpByEchoNet:string,
     aliasOption: AliasOption,
     unknownAsError:boolean,
     knownDeviceIpList:string[],
     searchDevices:boolean,
     commandTimeout:number,
-    findDeviceCallback:findDeviceCallback)
+    findDeviceCallback:findDeviceCallback,
+    propertyRequestRetryCount:number = 1,
+    propertyRequestRetryDelay:number = 0)
   {
     this.aliasOption = aliasOption;
     this.deviceConverter = new EchoNetDeviceConverter(this.aliasOption, unknownAsError);
     this.echonetLiteRawController = new EchoNetLiteRawController();
+    this.propertyRequestQueue = new PropertyRequestQueue(this.requestDevicePropertyInternal.bind(this));
     this.holdController = new EchoNetHoldController({request:this.requestDeviceProperty, set:this.setDevicePropertyPrivate, isBusy:()=>this.echonetLiteRawController.getSendQueueLength() >= 1});
     this.unknownAsError = unknownAsError;
     this.knownDeviceIpList = knownDeviceIpList;
@@ -41,6 +49,8 @@ export class EchoNetLiteController{
     this.usedIpByEchoNet = usedIpByEchoNet;
     this.commandTimeout = commandTimeout;
     this.findDeviceCallback = findDeviceCallback;
+    this.propertyRequestRetryCount = propertyRequestRetryCount;
+    this.propertyRequestRetryDelay = propertyRequestRetryDelay;
 
     this.echonetLiteRawController.addReveivedHandler(( rinfo:rinfo, els:eldata ):void=>{
       if(els.ESV === ELSV.SET_RES)
@@ -395,9 +405,19 @@ export class EchoNetLiteController{
       await this.echonetLiteRawController.searchDevicesInNetwork();
       Logger.info("[ECHONETLite]", `done searching devices`);
     }
+
+    // プロパティリクエストキューを開始
+    this.propertyRequestQueue.start();
   }
 
   requestDeviceProperty = async (id:DeviceId, propertyName:string):Promise<void> =>
+  {
+    // リクエストをキューに追加（非ブロッキング）
+    this.propertyRequestQueue.enqueue(id, propertyName);
+  }
+
+  // 実際のプロパティリクエスト実行用の内部メソッド（キューから呼ばれる）
+  private requestDevicePropertyInternal = async (id:DeviceId, propertyName:string):Promise<void> =>
   {
     const property = this.deviceConverter.getProperty(id.ip, id.eoj, propertyName);
     if(property === undefined)
@@ -411,20 +431,11 @@ export class EchoNetLiteController{
     {
       epc = epc.replace(/^0x/gi, "");
     }
-    let res = await this.echonetLiteRawController.execPromise({
-      ip:id.ip, 
-      seoj:"05ff01", 
-      deoj:id.eoj, 
-      esv: ELSV.GET, 
-      epc, 
-      edt:"",
-      tid:""});
-    let response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && (epc in _.els.DETAILs));
-    if(response === undefined)
+
+    // リトライロジック
+    for(let attempt = 0; attempt <= this.propertyRequestRetryCount; attempt++)
     {
-      // リトライする
-      Logger.warn("[ECHONETLite]", `requestDeviceProperty: retry get property value. epc=${epc}`, {responses:res.responses, command:res.command});
-      res = await this.echonetLiteRawController.execPromise({
+      const res = await this.echonetLiteRawController.execPromise({
         ip:id.ip, 
         seoj:"05ff01", 
         deoj:id.eoj, 
@@ -432,21 +443,37 @@ export class EchoNetLiteController{
         epc, 
         edt:"",
         tid:""});
-      response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && (epc in _.els.DETAILs));
-    }
-    if(response === undefined)
-    {
-      Logger.warn("[ECHONETLite]", `requestDeviceProperty: cannot get property value. epc=${epc}`, {responses:res.responses, command:res.command});
-      return;
-    }
-
-    {
-      const value = this.deviceConverter.convertPropertyValue(property, response.els.DETAILs[epc]);
-      if(value === undefined)
+      
+      const response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && (epc in _.els.DETAILs));
+      
+      if(response !== undefined)
       {
+        // 成功: プロパティ値を取得できた
+        const value = this.deviceConverter.convertPropertyValue(property, response.els.DETAILs[epc]);
+        if(value === undefined)
+        {
+          return;
+        }
+        this.firePropertyChangedEvent(id.ip, id.eoj, property.name, value);
         return;
       }
-      this.firePropertyChangedEvent(id.ip, id.eoj, property.name, value);
+
+      // 失敗: まだリトライ可能か確認
+      if(attempt < this.propertyRequestRetryCount)
+      {
+        Logger.debug("[ECHONETLite]", `requestDeviceProperty: retry get property value (attempt ${attempt + 1}/${this.propertyRequestRetryCount}). epc=${epc}`, {responses:res.responses, command:res.command});
+        
+        // リトライ間隔が設定されている場合は待機
+        if(this.propertyRequestRetryDelay > 0)
+        {
+          await new Promise(resolve => setTimeout(resolve, this.propertyRequestRetryDelay));
+        }
+      }
+      else
+      {
+        // すべてのリトライが失敗
+        Logger.warn("[ECHONETLite]", `requestDeviceProperty: cannot get property value after ${this.propertyRequestRetryCount + 1} attempts. epc=${epc}`, {responses:res.responses, command:res.command});
+      }
     }
   }
 
@@ -460,6 +487,7 @@ export class EchoNetLiteController{
     return {
       hold: this.holdController.getInternalStatus(),
       rawController: this.echonetLiteRawController.getInternalStatus(),
+      propertyRequestQueue: this.propertyRequestQueue.getStatus(),
     }
   }
 }

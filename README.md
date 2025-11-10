@@ -151,6 +151,12 @@ MQTT Options
 | `MQTT_BASE_TOPIC`    | `--MqttBaseTopic`  | MQTT topic prefix. (Default:"echonetlite2mqtt/elapi/v2/devices") |
 
 
+Log Options
+
+|  Environment Variables | Commandline Parameter | Description |
+| ------------------     | --------------------- | ----------- |
+| `ECHONET_LOG_LEVEL` | (none) | Specify the log level. Can be one of: error, warn, info, debug. (Default: info) |
+
 REST API Options
 
 |  Environment Variables | Commandline Parameter | Description |
@@ -167,6 +173,8 @@ ECHONET Lite Options
 | `ECHONET_TARGET_NETWORK` | `--echonetTargetNetwork` | Specify the network for ECHONET Lite in the format "000.000.000.000/00". (Default: Auto) |
 | `ECHONET_DEVICE_IP_LIST`                | `--echonetDeviceIpList`               | Specify the device IPs separated by commas. (Default: none) |
 | `ECHONET_COMMAND_TIMEOUT` | `--echonetCommandTimeout` | Specify the timeout for ECHONET Lite commands. (Unit: ms) (Default: 3000) |
+| `ECHONET_PROPERTY_REQUEST_RETRY_COUNT` | (none) | Specify the number of retries for property requests on failure. (Default: 1) |
+| `ECHONET_PROPERTY_REQUEST_RETRY_DELAY` | (none) | Specify the retry interval for property requests. (Unit: ms) (Default: 0) |
 | `ECHONET_DISABLE_AUTO_DEVICE_DISCOVERY` | `--echonetDisableAutoDeviceDiscovery` | Disable automatic device discovery. (default: off) |
 | `ECHONET_ALIAS_FILE`   | `--echonetAliasFile`  | The file path for alias option file. (Defalt: (empty)) |
 | `ECHONET_UNKNOWN_AS_ERROR`   | `--echonetUnknownAsError`  | Specifies whether to  treat unknown classes and unknown properties as errors. (Default: off) |

@@ -14,7 +14,11 @@ const myConsoleFormat = winston.format.printf((info: TransformableInfo) =>{
   }
 })
 
+// 環境変数からログレベルを取得（デフォルト: info）
+const logLevel = process.env.ECHONET_LOG_LEVEL?.toLowerCase() || 'info';
+
 const logger = winston.createLogger({
+  level: logLevel,
   transports: [
     new winston.transports.Console({format: winston.format.combine(
         myConsoleFormat

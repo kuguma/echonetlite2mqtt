@@ -146,6 +146,12 @@ MQTT オプション
 | `MQTT_BASE_TOPIC`    | `--MqttBaseTopic`  | MQTTトピックのプレフィックスを指定します。(デフォルト:"echonetlite2mqtt/elapi/v2/devices") |
 
 
+ログオプション
+
+|  環境変数 | コマンドライン引数 | 説明 |
+| ------------------     | --------------------- | ----------- |
+| `ECHONET_LOG_LEVEL` | (なし) | ログレベルを指定します。error, warn, info, debug のいずれかを指定できます。 (デフォルト: info) |
+
 REST API オプション
 
 |  環境変数 | コマンドライン引数 | 説明 |
@@ -161,6 +167,8 @@ ECHONET Lite オプション
 | `ECHONET_TARGET_NETWORK` | `--echonetTargetNetwork` | ECHONET Liteのネットワークを"000.000.000.000/00"の形で指定します。 (デフォルト: 自動) |
 | `ECHONET_DEVICE_IP_LIST` | `--echonetDeviceIpList` | デバイスのIPをカンマ区切りで指定します。(デフォルト:無し) |
 | `ECHONET_COMMAND_TIMEOUT` | `--echonetCommandTimeout` | ECHONET Liteコマンドの応答待ちの時間を指定します. (単位: ms) (デフォルト: 3000) |
+| `ECHONET_PROPERTY_REQUEST_RETRY_COUNT` | (なし) | プロパティリクエスト失敗時のリトライ回数を指定します。(デフォルト: 1) |
+| `ECHONET_PROPERTY_REQUEST_RETRY_DELAY` | (なし) | プロパティリクエストのリトライ間隔を指定します。(単位: ms) (デフォルト: 0) |
 | `ECHONET_DISABLE_AUTO_DEVICE_DISCOVERY` | `--echonetDisableAutoDeviceDiscovery` | デバイスの自動探索を無効にします。(デフォルト: off) |
 | `ECHONET_ALIAS_FILE`   | `--echonetAliasFile`  | エイリアスオプションファイルを指定します。 (デフォルト: (空)) |
 | `ECHONET_UNKNOWN_AS_ERROR`   | `--echonetUnknownAsError`  | 不明なデバイスクラスや不明なプロパティをエラーとして扱います。 (デフォルト: off) |
