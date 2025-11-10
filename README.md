@@ -169,7 +169,6 @@ ECHONET Lite Options
 | `ECHONET_COMMAND_TIMEOUT` | `--echonetCommandTimeout` | Specify the timeout for ECHONET Lite commands. (Unit: ms) (Default: 3000) |
 | `ECHONET_DISABLE_AUTO_DEVICE_DISCOVERY` | `--echonetDisableAutoDeviceDiscovery` | Disable automatic device discovery. (default: off) |
 | `ECHONET_ALIAS_FILE`   | `--echonetAliasFile`  | The file path for alias option file. (Defalt: (empty)) |
-| `ECHONET_LEGACY_MULTI_NIC_MODE` | `--echonetLegacyMultiNicMode` | Revert to legacy communication mode. (Default: off) |
 | `ECHONET_UNKNOWN_AS_ERROR`   | `--echonetUnknownAsError`  | Specifies whether to  treat unknown classes and unknown properties as errors. (Default: off) |
 | ~~`ECHONET_INTERVAL_TO_GET_PROPERTIES`~~ | ~~`--echonetIntervalToGetProperties`~~ | (Deprecated since v3.0.0) ~~Specifies the time interval for acquiring ECHONET Lite properties. (Unit: ms) (Default: 100)~~ |
 | ~~`ECHONET_ALT_MULTI_NIC_MODE`~~ | ~~`--echonetAltMultiNicMode`~~ | (Deprecated since v3.0.0) ~~Alternate mode in a multiple NIC environment. Specifies if you cannot receive status from the device. (Default: off)~~ |
@@ -231,9 +230,9 @@ npm start -- --MqttBroker "mqtt://your.mqtt.brocker" --MqttBaseTopic "echonetlit
 
 #### (1) This application may not work properly if the execution environment has multiple IPs.
 
-If your execution environment has multiple IPs, try the environment variable `ECHONET_TARGET_NETWORK` and `ECHONET_ALT_MULTI_NIC_MODE`. (when use Node.js, the command line parameter `--echonetTargetNetwork` and `--echonetAltMultiNicMode`)
-* for Docker: `-e ECHONET_TARGET_NETWORK="192.168.1.0/24" -e ECHONET_ALT_MULTI_NIC_MODE=1`
-* for Node.js: `--echonetTargetNetwork "192.168.1.0/24" --echonetAltMultiNicMode`
+If your execution environment has multiple IPs, try the environment variable `ECHONET_TARGET_NETWORK`. (when use Node.js, the command line parameter `--echonetTargetNetwork`)
+* for Docker: `-e ECHONET_TARGET_NETWORK="192.168.1.0/24"`
+* for Node.js: `--echonetTargetNetwork "192.168.1.0/24"`
 
 #### (2) ECHONET Lite devices may not automatically send property values.
 

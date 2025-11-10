@@ -17,15 +17,13 @@ export class EchoNetLiteController{
   private readonly deviceConverter:EchoNetDeviceConverter;
   private readonly controllerDeviceDefine:{[key: string]: { [key: string]: number[] }};
   private readonly usedIpByEchoNet:string;
-  private readonly legacyMultiNicMode:boolean;
   private readonly unknownAsError:boolean;
   private readonly knownDeviceIpList:string[];
   private readonly searchDevices:boolean;
   private readonly commandTimeout:number;
   private readonly findDeviceCallback:findDeviceCallback;
-  constructor(usedIpByEchoNet:string,  
-    aliasOption: AliasOption, 
-    legacyMultiNicMode:boolean, 
+  constructor(usedIpByEchoNet:string,
+    aliasOption: AliasOption,
     unknownAsError:boolean,
     knownDeviceIpList:string[],
     searchDevices:boolean,
@@ -36,7 +34,6 @@ export class EchoNetLiteController{
     this.deviceConverter = new EchoNetDeviceConverter(this.aliasOption, unknownAsError);
     this.echonetLiteRawController = new EchoNetLiteRawController();
     this.holdController = new EchoNetHoldController({request:this.requestDeviceProperty, set:this.setDevicePropertyPrivate, isBusy:()=>this.echonetLiteRawController.getSendQueueLength() >= 1});
-    this.legacyMultiNicMode = legacyMultiNicMode;
     this.unknownAsError = unknownAsError;
     this.knownDeviceIpList = knownDeviceIpList;
     this.searchDevices = searchDevices;
@@ -376,7 +373,6 @@ export class EchoNetLiteController{
     await this.echonetLiteRawController.initilize(
       Object.keys(this.controllerDeviceDefine),
       this.usedIpByEchoNet,
-      this.legacyMultiNicMode,
       this.commandTimeout
     );
 

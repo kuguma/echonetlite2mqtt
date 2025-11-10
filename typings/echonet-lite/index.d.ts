@@ -81,7 +81,7 @@ declare module "echonet-lite" {
   let Multi6:string;
   async function initialize(
     objList: string[],
-    userfunc: (rinfo: rinfo, els: eldata) => void,
+    userfunc: (rinfo: rinfo, els: eldata, err: Error | null) => void,
     ipVer?: number,
     Options?: {
       v4?: string;
@@ -126,9 +126,7 @@ declare module "echonet-lite" {
   function returner(
     bytes: Buffer,
     rinfo: rinfo,
-    userfunc:
-      | ((rinfo: rinfo, els: eldata) => void)
-      | ((rinfo: rinfo, els: eldata, e: any) => void)
+    userfunc: ((rinfo: rinfo, els: eldata, err: Error | null) => void)
   );
   function renewFacilities(ip: string, els: eldata): void;
   function setObserveFacilities(interval: number, onChanged: () => void): void;

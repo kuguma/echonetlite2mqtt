@@ -518,11 +518,11 @@ export class EchoNetLiteRawController {
     }
   }
 
-  
-  public initilize = async (objList:string[], echonetTargetNetwork:string, legacyMultiNicMode:boolean, commandTimeout:number):Promise<void> =>
+
+  public initilize = async (objList:string[], echonetTargetNetwork:string, commandTimeout:number):Promise<void> =>
   {
-    await EchoNetCommunicator.initialize(objList, 4, { v4: echonetTargetNetwork, autoGetProperties: false }, 
-      legacyMultiNicMode===false, commandTimeout);
+    await EchoNetCommunicator.initialize(objList, 4, { v4: echonetTargetNetwork, autoGetProperties: false },
+      commandTimeout);
   }
 
   public searchDeviceFromIp = async (ip:string):Promise<void> =>
