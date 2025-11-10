@@ -49,8 +49,14 @@ export class EchoNetCommunicator
     return result;
   }
 
-  static echonetUserFunc = (rinfo: rinfo, els: eldata):void =>
+  static echonetUserFunc = (rinfo: rinfo, els: eldata, err: Error | null):void =>
   {
+    if(err !== null)
+    {
+      Logger.error("[ECHONETLite][userfunc]", `caused error in echonet-lite.js packet parser. ${rinfo.address}: ${err.message}`);
+      return;
+    }
+    // echonet-lite.js側で対処したので大丈夫なはずだが一応残しておく
     if(els == undefined || els === null || Object.keys(els).length === 0){
       if (rinfo == undefined) {
         Logger.error("[ECHONETLite][userfunc]", "rinfo and eldata are undefined");
