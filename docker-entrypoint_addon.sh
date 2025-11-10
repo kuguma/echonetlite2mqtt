@@ -64,9 +64,6 @@ fi
 if (bashio::config.has_value 'ECHONET_ALIAS_FILE'); then
   export ECHONET_ALIAS_FILE=/addon_config/$(bashio::config "ECHONET_ALIAS_FILE")
 fi
-if (bashio::config.has_value 'ECHONET_LEGACY_MULTI_NIC_MODE'); then
-  export ECHONET_LEGACY_MULTI_NIC_MODE=$(bashio::config "ECHONET_LEGACY_MULTI_NIC_MODE")
-fi
 if (bashio::config.has_value 'ECHONET_UNKNOWN_AS_ERROR'); then
   export ECHONET_UNKNOWN_AS_ERROR=$(bashio::config "ECHONET_UNKNOWN_AS_ERROR")
 fi

@@ -163,7 +163,6 @@ ECHONET Lite オプション
 | `ECHONET_COMMAND_TIMEOUT` | `--echonetCommandTimeout` | ECHONET Liteコマンドの応答待ちの時間を指定します. (単位: ms) (デフォルト: 3000) |
 | `ECHONET_DISABLE_AUTO_DEVICE_DISCOVERY` | `--echonetDisableAutoDeviceDiscovery` | デバイスの自動探索を無効にします。(デフォルト: off) |
 | `ECHONET_ALIAS_FILE`   | `--echonetAliasFile`  | エイリアスオプションファイルを指定します。 (デフォルト: (空)) |
-| `ECHONET_LEGACY_MULTI_NIC_MODE` | `--echonetLegacyMultiNicMode` | 以前の通信モードに戻します。 (デフォルト: off) |
 | `ECHONET_UNKNOWN_AS_ERROR`   | `--echonetUnknownAsError`  | 不明なデバイスクラスや不明なプロパティをエラーとして扱います。 (デフォルト: off) |
 | ~~`ECHONET_INTERVAL_TO_GET_PROPERTIES`~~ | ~~`--echonetIntervalToGetProperties`~~ | (v3.0.0以降で廃止されました) ~~ECHONET Liteプロパティの受信間隔を指定します。(単位: ms) (デフォルト: 100)~~ |
 | ~~`ECHONET_ALT_MULTI_NIC_MODE`~~ | ~~`--echonetAltMultiNicMode`~~ | (v3.0.0以降で廃止されました) ~~複数NIC環境での代替モードです。もしデバイスから状態を受信できない場合は指定します。 (デフォルト: OFF)~~ |
@@ -229,11 +228,11 @@ npm start -- --MqttBroker "mqtt://your.mqtt.brocker" --MqttBaseTopic "echonetlit
 
 #### (1) 複数のIPがある環境だと正常に動作しないことがあります。
 
-もし実行環境に複数のIPがある場合、 `ECHONET_TARGET_NETWORK` と `ECHONET_ALT_MULTI_NIC_MODE` を試してみてください。
-(Node.jsを使用している場合は `--echonetTargetNetwork` と `--echonetAltMultiNicMode`)
+もし実行環境に複数のIPがある場合、 `ECHONET_TARGET_NETWORK` を試してみてください。
+(Node.jsを使用している場合は `--echonetTargetNetwork`)
 
-* Dockerの場合: `-e ECHONET_TARGET_NETWORK="192.168.1.0/24" -e ECHONET_ALT_MULTI_NIC_MODE=1`
-* Node.jsの場合: `--echonetTargetNetwork "192.168.1.0/24" --echonetAltMultiNicMode`
+* Dockerの場合: `-e ECHONET_TARGET_NETWORK="192.168.1.0/24"`
+* Node.jsの場合: `--echonetTargetNetwork "192.168.1.0/24"`
 
 #### (2) ECHONET Lite 機器が自動でプロパティを送らないのかも
 

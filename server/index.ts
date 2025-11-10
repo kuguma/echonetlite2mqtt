@@ -55,7 +55,6 @@ function isIpInCidr(testIp: string, cidr: string): boolean {
 interface InputParameters{
   echonetTargetNetwork:string;
   echonetAliasFile:string;
-  echonetLegacyMultiNicMode:boolean;
   echonetUnknownAsError:boolean;
   echonetDeviceIpList:string;
   echonetDisableAutoDeviceDiscovery:boolean;
@@ -79,7 +78,6 @@ interface InputParameters{
 
 let echonetTargetNetwork = "";
 let echonetAliasFile="";
-let echonetLegacyMultiNicMode = false;
 let echonetUnknownAsError = false;
 let echonetDeviceIpList = "";
 let echonetDisableAutoDeviceDiscovery = false;
@@ -110,17 +108,6 @@ if (
   process.env.ECHONET_ALIAS_FILE !== undefined
 ) {
   echonetAliasFile = process.env.ECHONET_ALIAS_FILE.replace(/^"/g, "").replace(/"$/g, "");
-}
-
-if( "ECHONET_LEGACY_MULTI_NIC_MODE" in process.env && process.env.ECHONET_LEGACY_MULTI_NIC_MODE !== undefined)
-{
-  if(process.env.ECHONET_LEGACY_MULTI_NIC_MODE !== "0" && 
-    process.env.ECHONET_LEGACY_MULTI_NIC_MODE !== "false" && 
-    process.env.ECHONET_LEGACY_MULTI_NIC_MODE !== "\"0\"" && 
-    process.env.ECHONET_LEGACY_MULTI_NIC_MODE !== "\"false\"")
-  {
-    echonetLegacyMultiNicMode = true;
-  }
 }
 
 if( "ECHONET_UNKNOWN_AS_ERROR" in process.env && process.env.ECHONET_UNKNOWN_AS_ERROR !== undefined)
@@ -259,13 +246,6 @@ for(var i = 2;i < process.argv.length; i++){
   {
     echonetAliasFile = value.replace(/^"/g, "").replace(/"$/g, "");
   }
-  if(name === "--echonetLegacyMultiNicMode".toLowerCase())
-  {
-    if(value !== "0" && value !== "false" && value !== "\"0\"" && value !== "\"false\"")
-    {
-      echonetLegacyMultiNicMode = true;
-    }
-  }
   if(name === "--echonetUnknownAsError".toLowerCase())
   {
     if(value !== "0" && value !== "false" && value !== "\"0\"" && value !== "\"false\"")
@@ -387,7 +367,6 @@ Logger.info("", "");
 
 logger.output(`echonetTargetNetwork=${echonetTargetNetwork}`);
 logger.output(`echonetAliasFile=${echonetAliasFile}`);
-logger.output(`echonetLegacyMultiNicMode=${echonetLegacyMultiNicMode}`);
 logger.output(`echonetUnknownAsError=${echonetUnknownAsError}`);
 logger.output(`echonetDeviceIpList=${echonetDeviceIpList}`);
 logger.output(`echonetDisableAutoDeviceDiscovery=${echonetDisableAutoDeviceDiscovery}`);
@@ -412,7 +391,6 @@ const inputParameters:InputParameters =
 {
   echonetTargetNetwork,
   echonetAliasFile,
-  echonetLegacyMultiNicMode,
   echonetUnknownAsError,
   echonetDeviceIpList,
   echonetDisableAutoDeviceDiscovery,
@@ -642,8 +620,8 @@ const systemStatusRepository = new SystemStatusRepositry();
 
 const deviceStore = new DeviceStore();
 
-const echoNetListController = new EchoNetLiteController(networkAddressForEchonet, 
-  aliasOption, echonetLegacyMultiNicMode, echonetUnknownAsError, 
+const echoNetListController = new EchoNetLiteController(networkAddressForEchonet,
+  aliasOption, echonetUnknownAsError,
   knownDeviceIpList, echonetDisableAutoDeviceDiscovery===false, echonetCommandTimeout,
   (internalId:string)=>deviceStore.getByInternalId(internalId));
 
