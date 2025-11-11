@@ -442,15 +442,15 @@ export class EchoNetLiteRawController {
         return;
       }
 
-      const respose = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && ("83" in _.els.DETAILs));
+      const response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && ("83" in _.els.DETAILs));
 
-      if(respose === undefined)
+      if(response === undefined)
       {
         device.noExistsId = true;
       }
       else
       {
-        const data = respose.els.DETAILs;
+        const data = response.els.DETAILs;
         let matchProperty = device.properties.find(_ => _.epc === "83");
         if (matchProperty === undefined) {
           matchProperty = {
