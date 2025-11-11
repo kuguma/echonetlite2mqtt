@@ -57,7 +57,7 @@ export class MqttController
 
     
     this.mqttClient.on("message", async (topic: string, payload: Buffer, packet: IPublishPacket):Promise<void>=>{
-      Logger.debug('[MQTT]', `topic:${topic} message:${payload.toString()}`);
+      // Logger.debug('[MQTT]', `topic:${topic} message:${payload.toString()}`);
 
       // set
       {

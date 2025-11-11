@@ -1,6 +1,7 @@
 import { DeviceDetailsType, eldata,rinfo } from "echonet-lite";
 import { Command, CommandResponse, Response, ELSV, EchoNetCommunicator, RawDataSet } from "./EchoNetCommunicator";
 import { Logger } from "./Logger";
+import { Mutex } from "async-mutex";
 
 
 export interface CommandWithCallback extends Command
@@ -10,23 +11,86 @@ export interface CommandWithCallback extends Command
 
 export class EchoNetLiteRawController {
   private readonly nodes: RawNode[] = [];
-  private readonly infQueue: Response[] = [];
-  private readonly sendQueue: CommandWithCallback[] = [];
-  private readonly requestQueue: Command[] = [];
-  private processing = false;
+  private readonly nodesUpdateMutex = new Mutex();
 
+  // IP別のキュー構造
+  private readonly ipQueues: Map<string, {
+    infQueue: Response[];
+    sendQueue: CommandWithCallback[];
+    requestQueue: Command[];
+    processing: boolean;
+  }> = new Map();
+
+  // 重複排除用のデータ構造
+  // IP別の保留中リクエストキー（GET用）
+  private readonly pendingGets: Map<string, Set<string>> = new Map();
+  // IP別の保留中SETリクエスト（requestKey → {最新値、Promise}）
+  private readonly pendingSets: Map<string, Map<string, {edt: string, promise: Promise<CommandResponse>}>> = new Map();
+
+  // デバイス収集の排他制御（ノードIP別）
+  // 同一ノードに対する並行getNewNode呼び出しを防ぎ、デバイス保護を維持
+  private readonly deviceCollectionMutexes: Map<string, Mutex> = new Map();
+
+  // IP別キューの取得または作成
+  private getOrCreateIpQueue(ip: string) {
+    let queue = this.ipQueues.get(ip);
+    if (!queue) {
+      queue = {
+        infQueue: [],
+        sendQueue: [],
+        requestQueue: [],
+        processing: false
+      };
+      this.ipQueues.set(ip, queue);
+    }
+    return queue;
+  }
+
+  // ノード更新の排他制御
+  private async updateOrAddNode(newNode: RawNode): Promise<void> {
+    return this.nodesUpdateMutex.runExclusive(() => {
+      const currentIndex = this.nodes.findIndex(_ => _.ip === newNode.ip);
+      if (currentIndex === -1) {
+        this.nodes.push(newNode);
+      } else {
+        this.nodes[currentIndex] = newNode;
+      }
+    });
+  }
+
+  // デバイス収集の排他制御（ノードIP別）
+  // 同一ノードに対する並行getNewNode呼び出しを防ぎ、デバイスへの並列リクエストを回避
+  private async getNewNodeWithLock(node: RawNode): Promise<RawNode> {
+    const nodeKey = node.ip;
+
+    // IP別のMutexを取得または作成
+    if (!this.deviceCollectionMutexes.has(nodeKey)) {
+      this.deviceCollectionMutexes.set(nodeKey, new Mutex());
+    }
+    const mutex = this.deviceCollectionMutexes.get(nodeKey)!;
+
+    return mutex.runExclusive(async () => {
+      Logger.debug("[ECHONETLite][lock]", `Starting device collection for ${nodeKey}`);
+      const result = await EchoNetLiteRawController.getNewNode(node);
+      Logger.debug("[ECHONETLite][lock]", `Completed device collection for ${nodeKey}`);
+      return result;
+    });
+  }
 
   constructor() {
     
     EchoNetCommunicator.addReveivedHandler((rinfo, els) => {
       if (els.ESV === ELSV.INF) {
-        this.infQueue.push({
+        const ip = rinfo.address;
+        const queue = this.getOrCreateIpQueue(ip);
+        queue.infQueue.push({
           rinfo: rinfo,
           els: els
         });
-        if (this.processing === false) {
+        Logger.debug("[ECHONETLite][queue]", `INF queued for ${ip}, infQueue=${queue.infQueue.length}, sendQueue=${queue.sendQueue.length}`);
+        if (queue.processing === false) {
           // INFの処理
-          this.processQueue();
+          this.processQueueForIp(ip);
         }
       }
       this.fireReceived(rinfo, els);
@@ -38,33 +102,154 @@ export class EchoNetLiteRawController {
     return this.nodes;
   }
 
-  public exec = (command:Command, callback:(res:CommandResponse)=>void):void =>
-  {
-    this.sendQueue.push({callback: callback, ...command});
-    if (this.processing === false) {
-      this.processQueue();
+  // 未使用
+  // public exec = (command:Command, callback:(res:CommandResponse)=>void):void =>
+  // {
+  //   this.sendQueue.push({callback: callback, ...command});
+  //   if (this.processing === false) {
+  //     this.processQueue();
+  //   }
+  // }
+
+  /**
+   * GETリクエストを発行（重複排除あり）
+   * 同じIP/EOJ/EPCへの同時リクエストは1つに統合される
+   */
+  public requestGet = async (
+    ip: string,
+    seoj: string,
+    deoj: string,
+    epc: string
+  ): Promise<CommandResponse> => {
+    const requestKey = `GET:${deoj}:${epc}`;
+
+    // IP別の保留中GETリクエストセットを取得または作成
+    if (!this.pendingGets.has(ip)) {
+      this.pendingGets.set(ip, new Set());
+    }
+    const pending = this.pendingGets.get(ip)!;
+
+    // 重複チェック
+    if (pending.has(requestKey)) {
+      Logger.debug("[ECHONETLite][dedup]", `Duplicate GET request rejected: ${ip} ${deoj} ${epc}`);
+      throw new Error(`Duplicate GET request: ${ip} ${deoj} ${epc}`);
+    }
+
+    // リクエストを保留中としてマーク
+    pending.add(requestKey);
+    Logger.debug("[ECHONETLite][dedup]", `GET request started: ${ip} ${deoj} ${epc}`);
+
+    try {
+      const result = await this.execPromise({
+        ip,
+        seoj,
+        deoj,
+        esv: ELSV.GET,
+        epc,
+        edt: "",
+        tid: ""
+      });
+      Logger.debug("[ECHONETLite][dedup]", `GET request completed: ${ip} ${deoj} ${epc}`);
+      return result;
+    } finally {
+      // 完了後、保留中マークを削除（クリーンアップ）
+      pending.delete(requestKey);
+      if (pending.size === 0) {
+        this.pendingGets.delete(ip);
+      }
     }
   }
-  
+
+  /**
+   * SETリクエストを発行（重複排除あり）
+   * 同じIP/EOJ/EPCへの連続リクエストは最新値のみが実行される
+   */
+  public requestSet = async (
+    ip: string,
+    seoj: string,
+    deoj: string,
+    epc: string,
+    edt: string
+  ): Promise<CommandResponse> => {
+    const requestKey = `SET:${deoj}:${epc}`;
+
+    // IP別の保留中SETリクエストマップを取得または作成
+    if (!this.pendingSets.has(ip)) {
+      this.pendingSets.set(ip, new Map());
+    }
+    const pending = this.pendingSets.get(ip)!;
+
+    // 重複チェック
+    if (pending.has(requestKey)) {
+      // 既に同じSETが保留中 → 最新値で上書き
+      const existingRequest = pending.get(requestKey)!;
+      existingRequest.edt = edt;
+      Logger.debug("[ECHONETLite][dedup]", `SET request updated with new value: ${ip} ${deoj} ${epc} = ${edt}`);
+      return existingRequest.promise;
+    }
+
+    // 新規SETリクエスト
+    Logger.debug("[ECHONETLite][dedup]", `SET request started: ${ip} ${deoj} ${epc} = ${edt}`);
+
+    // 実行用のデータ構造を作成
+    const request = {
+      edt,
+      promise: null as unknown as Promise<CommandResponse>
+    };
+
+    // Promiseを作成して保存
+    request.promise = (async () => {
+      try {
+        // 実行直前の最新値を取得（他のリクエストで上書きされている可能性がある）
+        const latestEdt = request.edt;
+        Logger.debug("[ECHONETLite][dedup]", `SET request executing: ${ip} ${deoj} ${epc} = ${latestEdt}`);
+
+        const result = await this.execPromise({
+          ip,
+          seoj,
+          deoj,
+          esv: ELSV.SETC,
+          epc,
+          edt: latestEdt,
+          tid: ""
+        });
+        Logger.debug("[ECHONETLite][dedup]", `SET request completed: ${ip} ${deoj} ${epc}`);
+        return result;
+      } finally {
+        // 完了後、保留中マークを削除（クリーンアップ）
+        pending.delete(requestKey);
+        if (pending.size === 0) {
+          this.pendingSets.delete(ip);
+        }
+      }
+    })();
+
+    pending.set(requestKey, request);
+    return request.promise;
+  }
+
   public execPromise = (command:Command):Promise<CommandResponse> =>
   {
     return new Promise<CommandResponse>((resolve, reject)=>{
-      this.sendQueue.push({callback: (res)=>{
+      const ip = command.ip;
+      const queue = this.getOrCreateIpQueue(ip);
+      queue.sendQueue.push({callback: (res)=>{
         resolve(res);
       }, ...command});
-      if (this.processing === false) {
-        this.processQueue();
+      Logger.debug("[ECHONETLite][queue]", `Command queued for ${ip}, infQueue=${queue.infQueue.length}, sendQueue=${queue.sendQueue.length}`);
+      if (queue.processing === false) {
+        this.processQueueForIp(ip);
       }
     });
   }
 
-
-  public enqueue = (command: Command): void  =>{
-    this.sendQueue.push({callback: undefined, ...command});
-    if (this.processing === false) {
-      this.processQueue();
-    }
-  }
+  // 未使用
+  // public enqueue = (command: Command): void  =>{
+  //   this.sendQueue.push({callback: undefined, ...command});
+  //   if (this.processing === false) {
+  //     this.processQueue();
+  //   }
+  // }
 
   private static convertToInstanceList(data: string): string[] {
     const result: string[] = [];
@@ -129,145 +314,128 @@ export class EchoNetLiteRawController {
     return response.els.DETAILs[epc];
   }
 
-  private static async getNewNode(node: RawNode): Promise<RawNode> {
-    const result: RawNode = {
-      ip: node.ip,
-      devices: node.devices.map(_ => ({
-        ip: _.ip,
-        eoj: _.eoj,
-        properties: [],
-        noExistsId: false
-      }))
-    };
-
-    // GET/SET/INFのプロパティマップを受信する
-    for (const device of result.devices)
+  // 単一デバイスの詳細情報を収集（内部は直列処理でデバイス保護）
+  private static async collectDeviceDetails(device: RawDevice, nodeIp: string): Promise<void> {
+    // GET/SET/INFのプロパティマップを受信する（単一デバイスに対しては直列実行）
+    for(const epc of ["9f", "9e", "9d"])
     {
-      for(const epc of ["9f", "9e", "9d"])
+      let res: CommandResponse;
+      try
       {
-        let res: CommandResponse;
-        try
-        {
-          res = await EchoNetCommunicator.execCommandPromise(result.ip, "0ef001", device.eoj, ELSV.GET, epc, "");
+        res = await EchoNetCommunicator.execCommandPromise(nodeIp, "0ef001", device.eoj, ELSV.GET, epc, "");
+      }
+      catch(e)
+      {
+        Logger.warn("[ECHONETLite][raw]", `error collectDeviceDetails: get ${epc}: exception from ${nodeIp},${device.eoj}`, {exception:e});
+        continue;
+      }
+      const response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && (epc in _.els.DETAILs));
+      if(response === undefined)
+      {
+        Logger.warn("[ECHONETLite][raw]", `error collectDeviceDetails: get ${epc} from ${nodeIp},${device.eoj}`, {responses:res.responses, command:res.command});
+        continue;
+      }
+
+      const edt = response.els.DETAILs;
+      const data = edt[epc];
+      const propertyList = EchoNetLiteRawController.convertToPropertyList(data);
+      if(propertyList === undefined)
+      {
+        Logger.warn("[ECHONETLite][raw]", `error collectDeviceDetails: get ${epc}: invalid receive data ${nodeIp},${device.eoj} ${JSON.stringify(edt)}`, {responses:res.responses, command:res.command});
+        continue;
+      }
+      for(const propertyMapEpc of propertyList)
+      {
+        let matchProperty = device.properties.find(_ => _.epc === propertyMapEpc);
+        if (matchProperty === undefined) {
+          matchProperty = {
+            ip: nodeIp,
+            eoj: device.eoj,
+            epc: propertyMapEpc,
+            value: "",
+            operation: {
+              get: false,
+              set: false,
+              inf: false
+            }
+          };
+          device.properties.push(matchProperty);
         }
-        catch(e)
-        {
-          Logger.warn("[ECHONETLite][raw]", `error getNewNode: get ${epc}: exception from ${result.ip},${device.eoj}`, {exception:e});
-          continue;
+        if(epc === "9f"){
+          matchProperty.operation.get = true;
         }
-        const response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && (epc in _.els.DETAILs));
-        if(response === undefined)
-        {
-          Logger.warn("[ECHONETLite][raw]", `error getNewNode: get ${epc} from ${result.ip},${device.eoj}`, {responses:res.responses, command:res.command});
-          continue;
+        if(epc === "9e"){
+          matchProperty.operation.set = true;
+        }
+        if(epc === "9d"){
+          matchProperty.operation.inf = true;
+        }
+      }
+
+      // 受信したデータをプロパティとして格納する
+      for (const epc in edt) {
+        let matchProperty = device.properties.find(_ => _.epc === epc);
+        if (matchProperty === undefined) {
+          matchProperty = {
+            ip: nodeIp,
+            eoj: device.eoj,
+            epc: epc,
+            value: "",
+            operation: {
+              get: false,
+              set: false,
+              inf: false
+            }
+          };
+          device.properties.push(matchProperty);
         }
 
-        const edt = response.els.DETAILs;
-        const data = edt[epc];
-        const propertyList = EchoNetLiteRawController.convertToPropertyList(data);
-        if(propertyList === undefined)
-        {
-          Logger.warn("[ECHONETLite][raw]", `error getNewNode: get ${epc}: invalid reveive data ${result.ip},${device.eoj} ${JSON.stringify(edt)}`, {responses:res.responses, command:res.command});
-          continue;
-        }
-        for(const propertyMapEpc of propertyList)
-        {
-          let matchProperty = device.properties.find(_ => _.epc === propertyMapEpc);
-          if (matchProperty === undefined) {
-            matchProperty = {
-              ip: result.ip,
-              eoj: device.eoj,
-              epc: propertyMapEpc,
-              value: "",
-              operation: {
-                get: false,
-                set: false,
-                inf: false
-              }
-            };
-            device.properties.push(matchProperty);
-          }
-          if(epc === "9f"){
-            matchProperty.operation.get = true;
-          }
-          if(epc === "9e"){
-            matchProperty.operation.set = true;
-          }
-          if(epc === "9d"){
-            matchProperty.operation.inf = true;
-          }
-        }
-        
-        // 受信したデータをプロパティとして格納する
-        for (const epc in edt) {
-          let matchProperty = device.properties.find(_ => _.epc === epc);
-          if (matchProperty === undefined) {
-            matchProperty = {
-              ip: result.ip,
-              eoj: device.eoj,
-              epc: epc,
-              value: "",
-              operation: {
-                get: false,
-                set: false,
-                inf: false
-              }
-            };
-            device.properties.push(matchProperty);
-          }
-
-          matchProperty.value = edt[epc];
-        }
+        matchProperty.value = edt[epc];
       }
     }
 
     // 取得していないgetプロパティを取得する
-    for (const device of result.devices) {
-      const epcList = device.properties.filter(_ => _.operation.get).filter(_ => _.value === "").map(_ => _.epc);
-      for (const epc of epcList) {
-        const value = await EchoNetLiteRawController.getProperty(result.ip, device.eoj, epc);
-        if (value === undefined) {
-          continue;
-        }
-        const matchProperty = device.properties.find(_ => _.epc === epc);
-        if (matchProperty === undefined) {
-          throw Error("ありえない");
-        }
-        matchProperty.value = value;
+    const epcList = device.properties.filter(_ => _.operation.get).filter(_ => _.value === "").map(_ => _.epc);
+    for (const epc of epcList) {
+      const value = await EchoNetLiteRawController.getProperty(nodeIp, device.eoj, epc);
+      if (value === undefined) {
+        continue;
       }
+      const matchProperty = device.properties.find(_ => _.epc === epc);
+      if (matchProperty === undefined) {
+        throw Error("ありえない");
+      }
+      matchProperty.value = value;
     }
 
     // 83 (識別番号)を取得していないのなら取得する
     // 本来、9f (getプロパティリスト)にないなら取得する必要はないのだが、過去バージョンでは9fに関わらずgetしていたので
     // 互換性のために取得する。
     // なお、9fに無くても、要求すると83を取得できるデバイスもある。
-    for (const device of result.devices) {
-      const idProperty = device.properties.find(_ => _.epc === "83");
-      if (idProperty !== undefined) {
-        continue;
-      }
+    const idProperty = device.properties.find(_ => _.epc === "83");
+    if (idProperty === undefined) {
       let res: CommandResponse;
       try {
         res = await EchoNetCommunicator.execCommandPromise(device.ip, '0ef001', device.eoj, ELSV.GET, "83", "");
       }
       catch (e) {
         device.noExistsId = true;
-        continue;
+        return;
       }
 
-      const respose = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && ("83" in _.els.DETAILs));
+      const response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && ("83" in _.els.DETAILs));
 
-      if(respose === undefined)
+      if(response === undefined)
       {
         device.noExistsId = true;
       }
-      else 
+      else
       {
-        const data = respose.els.DETAILs;
+        const data = response.els.DETAILs;
         let matchProperty = device.properties.find(_ => _.epc === "83");
         if (matchProperty === undefined) {
           matchProperty = {
-            ip: result.ip,
+            ip: nodeIp,
             eoj: device.eoj,
             epc: "83",
             value: "",
@@ -282,7 +450,25 @@ export class EchoNetLiteRawController {
         matchProperty.value = data["83"];
       }
     }
+  }
 
+  private static async getNewNode(node: RawNode): Promise<RawNode> {
+    const result: RawNode = {
+      ip: node.ip,
+      devices: node.devices.map(_ => ({
+        ip: _.ip,
+        eoj: _.eoj,
+        properties: [],
+        noExistsId: false
+      }))
+    };
+
+    // デバイス間は並列処理（デバイス内は直列でデバイス保護）
+    await Promise.allSettled(
+      result.devices.map(device => 
+        EchoNetLiteRawController.collectDeviceDetails(device, result.ip)
+      )
+    );
 
     return result;
   }
@@ -290,23 +476,35 @@ export class EchoNetLiteRawController {
 
 
 
-  private processQueue = async ():Promise<void> =>{
-    if (this.processing) {
+  private processQueueForIp = async (ip: string):Promise<void> =>{
+    const queue = this.getOrCreateIpQueue(ip);
+    
+    if (queue.processing) {
+      Logger.debug("[ECHONETLite][queue]", `${ip}: Already processing, skipped`);
       return;
     }
-    this.processing = true;
+    queue.processing = true;
+    
+    const startTime = Date.now();
+    const initialInfCount = queue.infQueue.length;
+    const initialSendCount = queue.sendQueue.length;
+    Logger.debug("[ECHONETLite][queue]", `${ip}: Start processing (inf=${initialInfCount}, send=${initialSendCount})`);
+    
     try {
       // infから先に処理する
-      while (this.infQueue.length > 0) {
-        const inf = this.infQueue.shift();
+      let infProcessed = 0;
+      while (queue.infQueue.length > 0) {
+        const inf = queue.infQueue.shift();
         if (inf === undefined) {
           throw Error("ありえない");
         }
+        infProcessed++;
 
         const foundNode = this.nodes.find(_ => _.ip === inf.rinfo.address);
         if (foundNode === undefined) {
           // 新たなノードからの通知で、d5(自ノードインスタンスリスト通知)ならば、新しいノードを追加する
           if ("d5" in inf.els.DETAILs) {
+            Logger.debug("[ECHONETLite][queue]", `${ip}: Processing INF d5 (new node discovery)`);
             const nodeTemp: RawNode = {
               ip: inf.rinfo.address,
               devices: [{
@@ -327,16 +525,9 @@ export class EchoNetLiteRawController {
             });
 
             // ノート応答が遅い場合ここで待たされることになるが、一旦あきらめる
-            const newNode = await EchoNetLiteRawController.getNewNode(nodeTemp);
-            const currentIndex = this.nodes.findIndex(_=>_.ip === newNode.ip);
-            if(currentIndex===-1)
-            {
-              this.nodes.push(newNode);
-            }
-            else
-            {
-              this.nodes[currentIndex] = newNode;
-            }
+            // 排他制御付きでノード詳細を取得
+            const newNode = await this.getNewNodeWithLock(nodeTemp);
+            await this.updateOrAddNode(newNode);
             this.fireDeviceDetected(newNode.ip, newNode.devices.map(_=>_.eoj));
           }
           continue;
@@ -362,6 +553,7 @@ export class EchoNetLiteRawController {
               continue;
             }
 
+            Logger.debug("[ECHONETLite][queue]", `${ip}: Processing INF d5 (device update)`);
             eojList.forEach(eoj => {
               nodeTemp.devices.push({
                 ip: inf.rinfo.address,
@@ -371,16 +563,9 @@ export class EchoNetLiteRawController {
               });
             });
 
-            const newNode = await EchoNetLiteRawController.getNewNode(nodeTemp);
-            const currentIndex = this.nodes.findIndex(_=>_.ip === newNode.ip);
-            if(currentIndex===-1)
-            {
-              this.nodes.push(newNode);
-            }
-            else
-            {
-              this.nodes[currentIndex] = newNode;
-            }
+            // 排他制御付きでノード詳細を取得
+            const newNode = await this.getNewNodeWithLock(nodeTemp);
+            await this.updateOrAddNode(newNode);
             this.fireDeviceDetected(newNode.ip, newNode.devices.map(_=>_.eoj));
 
           }
@@ -411,12 +596,19 @@ export class EchoNetLiteRawController {
             foundProperty.value);
         }
       }
+      if(infProcessed > 0) {
+        Logger.debug("[ECHONETLite][queue]", `${ip}: Processed ${infProcessed} INF items`);
+      }
 
-      while (this.sendQueue.length > 0) {
-        const command = this.sendQueue.shift();
+      let sendProcessed = 0;
+      while (queue.sendQueue.length > 0) {
+        const command = queue.sendQueue.shift();
         if (command === undefined) {
           throw Error("ありえない");
         }
+        sendProcessed++;
+        Logger.debug("[ECHONETLite][queue]", `${ip}: Sending command ${command.seoj}->${command.deoj} ESV=${command.esv} EPC=${command.epc}`);
+        
         let res: CommandResponse;
         try
         {
@@ -475,46 +667,53 @@ export class EchoNetLiteRawController {
           command.callback(res);
         }
       }
+      if(sendProcessed > 0) {
+        Logger.debug("[ECHONETLite][queue]", `${ip}: Processed ${sendProcessed} command items`);
+      }
 
       // Requestキューは優先度低め。他に処理が来たときは中断してそちらを優先する
-      while (this.requestQueue.length > 0) {
-        if(this.infQueue.length > 0 || this.sendQueue.length > 0)
-        {
-          break;
-        }
-        const command = this.requestQueue.shift();
-        if(command === undefined)
-        {
-          throw Error("ありえない");
-        }
+      // Requestキューは現在の実装では使われていない模様
+      // while (queue.requestQueue.length > 0) {
+      //   if(queue.infQueue.length > 0 || queue.sendQueue.length > 0)
+      //   {
+      //     break;
+      //   }
+      //   const command = queue.requestQueue.shift();
+      //   if(command === undefined)
+      //   {
+      //     throw Error("ありえない");
+      //   }
         
-        const newValue = await EchoNetLiteRawController.getProperty(command.ip, command.deoj, command.epc);
-        if (newValue === undefined) {
-          continue;
-        }
-        const matchProperty = this.findProperty(command.ip, command.deoj, command.epc);
-        if (matchProperty === undefined) {
-          throw Error("ありえない");
-        }
+      //   const newValue = await EchoNetLiteRawController.getProperty(command.ip, command.deoj, command.epc);
+      //   if (newValue === undefined) {
+      //     continue;
+      //   }
+      //   const matchProperty = this.findProperty(command.ip, command.deoj, command.epc);
+      //   if (matchProperty === undefined) {
+      //     throw Error("ありえない");
+      //   }
 
-        const oldValue = matchProperty.value;
-        matchProperty.value = newValue;
+      //   const oldValue = matchProperty.value;
+      //   matchProperty.value = newValue;
 
-        // イベントを発火する
-        this.firePropertyChanged(
-          matchProperty.ip, 
-          matchProperty.eoj, 
-          matchProperty.epc, 
-          oldValue, 
-          matchProperty.value);
-      }
+      //   // イベントを発火する
+      //   this.firePropertyChanged(
+      //     matchProperty.ip, 
+      //     matchProperty.eoj, 
+      //     matchProperty.epc, 
+      //     oldValue, 
+      //     matchProperty.value);
+      // }
     }
     finally {
-      this.processing = false;
+      queue.processing = false;
+      const elapsed = Date.now() - startTime;
+      Logger.debug("[ECHONETLite][queue]", `${ip}: Finished processing in ${elapsed}ms (remaining: inf=${queue.infQueue.length}, send=${queue.sendQueue.length})`);
     }
 
-    if (this.infQueue.length > 0 || this.sendQueue.length > 0 || this.requestQueue.length > 0) {
-      setTimeout(this.processQueue, 1);
+    if (queue.infQueue.length > 0 || queue.sendQueue.length > 0 || queue.requestQueue.length > 0) {
+      Logger.debug("[ECHONETLite][queue]", `${ip}: More items in queue, scheduling next processing`);
+      setTimeout(() => this.processQueueForIp(ip), 1);
     }
   }
 
@@ -527,18 +726,21 @@ export class EchoNetLiteRawController {
 
   public searchDeviceFromIp = async (ip:string):Promise<void> =>
   {
+    const startTime = Date.now();
+    Logger.debug("[ECHONETLite][discovery]", `Starting device discovery for ${ip}`);
+
     let res: CommandResponse;
     try {
       res = await EchoNetCommunicator.execCommandPromise(ip, '0ef001', '0ef001', ELSV.GET, "d6", "");
     }
     catch (e) {
-      Logger.warn("[ECHONETLite][raw]", `error searchDeviceFromIp: timeout ${ip} 0ef001 d6`, {exception:e});
+      Logger.warn("[ECHONETLite][discovery]", `Discovery failed for ${ip}: timeout`, {exception:e});
       return undefined;
     }
     const response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && ("d6" in _.els.DETAILs));
     if(response === undefined)
     {
-      Logger.warn("[ECHONETLite][raw]", `error searchDeviceFromIp: ${ip}`, {responses:res.responses, command:res.command});
+      Logger.warn("[ECHONETLite][discovery]", `Discovery failed for ${ip}: no valid response`, {responses:res.responses, command:res.command});
       return;
     }
 
@@ -553,6 +755,7 @@ export class EchoNetLiteRawController {
         }
       ]
     };
+    const deviceCount = EchoNetLiteRawController.convertToInstanceList(response.els.DETAILs["d6"]).length;
     EchoNetLiteRawController.convertToInstanceList(response.els.DETAILs["d6"]).forEach(eoj => {
       node.devices.push({
         ip: response.rinfo.address,
@@ -562,20 +765,15 @@ export class EchoNetLiteRawController {
       });
     });
 
-    // ノードの詳細を取得する
-    const newNode = await EchoNetLiteRawController.getNewNode(node);
+    Logger.debug("[ECHONETLite][discovery]", `Found ${deviceCount} devices on ${ip}, fetching details`);
 
-    const currentIndex = this.nodes.findIndex(_=>_.ip === newNode.ip);
-    if(currentIndex===-1)
-    {
-      this.nodes.push(newNode);
-    }
-    else
-    {
-      this.nodes[currentIndex] = newNode;
-    }
-
+    // ノードの詳細を取得する（排他制御付き）
+    const newNode = await this.getNewNodeWithLock(node);
+    await this.updateOrAddNode(newNode);
     this.fireDeviceDetected(newNode.ip, newNode.devices.map(_=>_.eoj));
+
+    const elapsed = Date.now() - startTime;
+    Logger.info("[ECHONETLite][discovery]", `Device discovery for ${ip} completed in ${elapsed}ms (${deviceCount} devices)`);
   }
 
   public searchDevicesInNetwork = async (): Promise<void> =>{
@@ -589,6 +787,8 @@ export class EchoNetLiteRawController {
       "d6",
       "",
       5000);
+
+    Logger.info("[ECHONETLite][discovery]", `Received ${res.responses.length} responses from multicast`);
 
     // 取得結果から、ノードを作成する
     var nodesTemp = res.responses.map((response): RawNode|undefined => {
@@ -621,24 +821,47 @@ export class EchoNetLiteRawController {
       return result;
     }).filter(_=>_!==undefined);
 
-    // ノードの詳細を取得する
-    for (const node of nodesTemp) {
-      if(node === undefined)
-      {
-        throw Error("ありえない");
+    // ノードの詳細を取得する（ノード間は並列処理）
+    const startTime = Date.now();
+    const nodeIps = nodesTemp.map(n => n?.ip).join(", ");
+    Logger.info("[ECHONETLite][discovery]", `Starting parallel node discovery for ${nodesTemp.length} nodes: [${nodeIps}]`);
+
+    const newNodesResults = await Promise.allSettled(
+      nodesTemp.map(async (node) => {
+        if(node === undefined) {
+          throw Error("ありえない");
+        }
+        const nodeStartTime = Date.now();
+        Logger.debug("[ECHONETLite][discovery]", `Starting node detail collection for ${node.ip}`);
+
+        // 排他制御付きでノード詳細を取得
+        const newNode = await this.getNewNodeWithLock(node);
+
+        const nodeElapsed = Date.now() - nodeStartTime;
+        const deviceCount = newNode.devices.length;
+        Logger.info("[ECHONETLite][discovery]", `Node detail collection for ${node.ip} completed in ${nodeElapsed}ms (${deviceCount} devices)`);
+
+        return newNode;
+      })
+    );
+
+    // 結果を処理（こちらは順次処理で排他制御）
+    let successCount = 0;
+    let failCount = 0;
+    for (const result of newNodesResults) {
+      if (result.status === "fulfilled") {
+        const newNode = result.value;
+        await this.updateOrAddNode(newNode);
+        this.fireDeviceDetected(newNode.ip, newNode.devices.map(_=>_.eoj));
+        successCount++;
+      } else {
+        failCount++;
+        Logger.warn("[ECHONETLite][discovery]", `Node discovery failed: ${result.reason}`);
       }
-      const newNode = await EchoNetLiteRawController.getNewNode(node);
-      const currentIndex = this.nodes.findIndex(_=>_.ip === newNode.ip);
-      if(currentIndex===-1)
-      {
-        this.nodes.push(newNode);
-      }
-      else
-      {
-        this.nodes[currentIndex] = newNode;
-      }
-      this.fireDeviceDetected(newNode.ip, newNode.devices.map(_=>_.eoj));
     }
+
+    const totalElapsed = Date.now() - startTime;
+    Logger.info("[ECHONETLite][discovery]", `Network discovery completed in ${totalElapsed}ms (success=${successCount}, failed=${failCount})`);
   }
 
   private deviceDetectedListeners:((ip:string, eojList:string[])=>void)[] = [];
@@ -695,6 +918,26 @@ export class EchoNetLiteRawController {
     return {
       elData:EchoNetCommunicator.getFacilities(),
       nodes:this.nodes
+    };
+  }
+
+  public getDeduplicationStatus = ():unknown =>
+  {
+    let totalPendingGets = 0;
+    let totalPendingSets = 0;
+
+    for (const pending of this.pendingGets.values()) {
+      totalPendingGets += pending.size;
+    }
+
+    for (const pending of this.pendingSets.values()) {
+      totalPendingSets += pending.size;
+    }
+
+    return {
+      pendingGetRequests: totalPendingGets,
+      pendingSetRequests: totalPendingSets,
+      ipCount: Math.max(this.pendingGets.size, this.pendingSets.size)
     };
   }
 

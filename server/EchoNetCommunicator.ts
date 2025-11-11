@@ -91,7 +91,19 @@ export class EchoNetCommunicator
     {
       this.getHandlers.forEach(_=>_(rinfo,els));
     }
-    this.commandResponse?.addResponse({rinfo, els});
+    
+    // TIDベースでコマンドレスポンスを取得
+    const commandResponse = this.commandResponses.get(els.TID);
+    if(commandResponse !== undefined)
+    {
+      // Logger.debug("[ECHONETLite][tid]", `Response matched: TID=${els.TID}, ${rinfo.address} ${els.SEOJ}->${els.DEOJ} ESV=${els.ESV}`);
+      commandResponse.addResponse({rinfo, els});
+    }
+    else if(els.ESV === ELSV.SET_RES || els.ESV === ELSV.GET_RES || els.ESV === ELSV.GET_SNA)
+    {
+      // INFは応答ではないのでログ不要。応答系のみログ出力
+      // Logger.debug("[ECHONETLite][tid]", `Response unmatched: TID=${els.TID}, ${rinfo.address} ${els.SEOJ}->${els.DEOJ} ESV=${els.ESV} (pending=${this.commandResponses.size})`);
+    }
     
     this.reveivedHandlers.forEach(_=>_(rinfo,els));
   }
@@ -187,7 +199,8 @@ export class EchoNetCommunicator
   }
 
   static commandTimeout=1000;
-  static commandResponse:CommandResponse|undefined = undefined;
+  static commandResponses: Map<string, CommandResponse> = new Map();
+  
   public static execCommandPromise(
     ip: string,
     seoj: string,
@@ -208,18 +221,35 @@ export class EchoNetCommunicator
     }
     const tid = EL.sendOPC1(ip, seoj, deoj, esv, epc, edt);
     command.tid = EL.bytesToString(tid);
+    
+    // TIDラップアラウンド対策: 同じTIDの古いCommandResponseがあれば削除
+    const existingResponse = this.commandResponses.get(command.tid);
+    if(existingResponse !== undefined)
+    {
+      existingResponse.cancelTimeout();
+      this.commandResponses.delete(command.tid);
+      Logger.warn("[ECHONETLite][comm]", `TID collision detected: ${command.tid}, old request removed`);
+    }
+    
     const commandResponse = new CommandResponse(command);
-    this.commandResponse = commandResponse;
+    // Logger.debug("[ECHONETLite][tid]", `Command sent: TID=${command.tid}, ${ip} ${seoj}->${deoj} ESV=${esv} EPC=${epc} (pending=${this.commandResponses.size + 1})`);
 
     return new Promise<CommandResponse>((resolve,reject)=>{
       const handle = setTimeout(()=>{
+        this.commandResponses.delete(command.tid);
+        // Logger.debug("[ECHONETLite][tid]", `Command timeout: TID=${command.tid}, ${ip} ${seoj}->${deoj} ESV=${esv} EPC=${epc}`);
         reject({message:"timeout", commandResponse});
       }, this.commandTimeout);
+      
+      commandResponse.timeoutHandle = handle;
       commandResponse.setCallback(()=>{
-        this.commandResponse = undefined;
-        clearTimeout(handle);
+        this.commandResponses.delete(command.tid);
+        commandResponse.cancelTimeout();
+        // Logger.debug("[ECHONETLite][tid]", `Command completed: TID=${command.tid}, ${ip} ${seoj}->${deoj} ESV=${esv} EPC=${epc} (pending=${this.commandResponses.size})`);
         resolve(commandResponse);
       });
+      
+      this.commandResponses.set(command.tid, commandResponse);
     });
   }
 
@@ -246,18 +276,32 @@ export class EchoNetCommunicator
     });
     const tid = await EL.sendDetails(ip, seoj, deoj, esv, edt);
     command.tid = EL.bytesToString(tid);
+    
+    // TIDラップアラウンド対策: 同じTIDの古いCommandResponseがあれば削除
+    const existingResponse = this.commandResponses.get(command.tid);
+    if(existingResponse !== undefined)
+    {
+      existingResponse.cancelTimeout();
+      this.commandResponses.delete(command.tid);
+      Logger.warn("[ECHONETLite][comm]", `TID collision detected: ${command.tid}, old request removed`);
+    }
+    
     const commandResponse = new CommandResponse(command);
-    this.commandResponse = commandResponse;
 
     return await new Promise<CommandResponse>((resolve,reject)=>{
       const handle = setTimeout(()=>{
+        this.commandResponses.delete(command.tid);
         reject({message:"timeout", commandResponse});
       }, this.commandTimeout);
+      
+      commandResponse.timeoutHandle = handle;
       commandResponse.setCallback(()=>{
-        this.commandResponse = undefined;
-        clearTimeout(handle);
+        this.commandResponses.delete(command.tid);
+        commandResponse.cancelTimeout();
         resolve(commandResponse);
       });
+      
+      this.commandResponses.set(command.tid, commandResponse);
     });
   }
 
@@ -282,13 +326,30 @@ export class EchoNetCommunicator
     }
     const tid = EL.sendOPC1(ip, seoj, deoj, esv, epc, edt);
     command.tid = EL.bytesToString(tid);
+
+    // TIDラップアラウンド対策: 同じTIDの古いCommandResponseがあれば削除
+    const existingResponse = this.commandResponses.get(command.tid);
+    if(existingResponse !== undefined)
+    {
+      existingResponse.cancelTimeout();
+      this.commandResponses.delete(command.tid);
+      Logger.warn("[ECHONETLite][comm]", `TID collision detected: ${command.tid}, old request removed`);
+    }
+
     const commandResponse = new CommandResponse(command);
-    this.commandResponse = commandResponse;
 
     return new Promise<CommandResponse>((resolve,reject)=>{
-      setTimeout(()=>{
+      const handle = setTimeout(()=>{
+        this.commandResponses.delete(command.tid);
         resolve(commandResponse);
       }, timeout);
+
+      commandResponse.timeoutHandle = handle;
+
+      // マルチキャスト応答収集のため、setCallbackは呼ばない
+      // タイムアウトまで全応答を蓄積する
+
+      this.commandResponses.set(command.tid, commandResponse);
     });
   }
 }
@@ -319,10 +380,14 @@ export interface Command
 export class CommandResponse
 {
   readonly command:Command;
+  readonly createdAt:number; // TIDラップアラウンド対策用タイムスタンプ
   callback:()=>void = ()=>{};
+  timeoutHandle?: NodeJS.Timeout; // タイムアウトハンドラの保持
+  
   constructor(command:Command)
   {
     this.command = command;
+    this.createdAt = Date.now();
   }
   responses:Response[] = [];
 
@@ -339,6 +404,15 @@ export class CommandResponse
   public setCallback(callback:()=>void):void
   {
     this.callback = callback;
+  }
+
+  public cancelTimeout():void
+  {
+    if(this.timeoutHandle !== undefined)
+    {
+      clearTimeout(this.timeoutHandle);
+      this.timeoutHandle = undefined;
+    }
   }
 
   public addResponse = (response:Response):void =>
