@@ -38,13 +38,14 @@ export class EchoNetLiteRawController {
     return this.nodes;
   }
 
-  public exec = (command:Command, callback:(res:CommandResponse)=>void):void =>
-  {
-    this.sendQueue.push({callback: callback, ...command});
-    if (this.processing === false) {
-      this.processQueue();
-    }
-  }
+  // 未使用
+  // public exec = (command:Command, callback:(res:CommandResponse)=>void):void =>
+  // {
+  //   this.sendQueue.push({callback: callback, ...command});
+  //   if (this.processing === false) {
+  //     this.processQueue();
+  //   }
+  // }
   
   public execPromise = (command:Command):Promise<CommandResponse> =>
   {
@@ -58,13 +59,13 @@ export class EchoNetLiteRawController {
     });
   }
 
-
-  public enqueue = (command: Command): void  =>{
-    this.sendQueue.push({callback: undefined, ...command});
-    if (this.processing === false) {
-      this.processQueue();
-    }
-  }
+  // 未使用
+  // public enqueue = (command: Command): void  =>{
+  //   this.sendQueue.push({callback: undefined, ...command});
+  //   if (this.processing === false) {
+  //     this.processQueue();
+  //   }
+  // }
 
   private static convertToInstanceList(data: string): string[] {
     const result: string[] = [];
