@@ -262,6 +262,55 @@ export class PropertySyncManager {
   }
 
   /**
+   * 単一の同期リクエストを処理
+   */
+  private async processSingleSyncRequest(
+    req: UpdateRequest,
+    ip: string,
+    deviceStore: DeviceStore,
+    requestDevicePropertyFn: (id: {id:string, ip:string, eoj:string, internalId:string}, propertyName: string, options?: any) => Promise<void>
+  ): Promise<void> {
+    // デバイスを検索してDeviceIdを作成
+    const device = deviceStore.getAll().find(d => d.ip === req.ip && d.eoj === req.eoj);
+    if (!device) {
+      Logger.warn("[PropertySync]", `${ip}: Device not found for ${req.eoj}`);
+      return;
+    }
+
+    const deviceId = {
+      id: device.id,
+      ip: device.ip,
+      eoj: device.eoj,
+      internalId: device.internalId
+    };
+
+    Logger.debug("[PropertySync]", `${ip}: Requesting sync for ${req.eoj} ${req.propertyName}`);
+
+    try {
+      // requestDevicePropertyをbackground優先度で実行
+      await requestDevicePropertyFn(deviceId, req.propertyName, {
+        priority: 'background',
+        retryCount: 0,
+        retryDelay: 0,
+        onSuccess: () => {
+          // 成功時: PropertySyncManagerに成功を通知
+          this.markAsUpdated(req.ip, req.eoj, req.propertyName);
+          Logger.debug("[PropertySync]", `${ip}: Sync success for ${req.eoj} ${req.propertyName}`);
+        },
+        onFailure: () => {
+          // 失敗時: バックオフを増加
+          this.markAsFailed(req.ip, req.eoj, req.propertyName);
+          Logger.debug("[PropertySync]", `${ip}: Sync failed for ${req.eoj} ${req.propertyName}, backoff increased`);
+        }
+      });
+    } catch (e) {
+      // 例外時もバックオフを増加
+      this.markAsFailed(req.ip, req.eoj, req.propertyName);
+      Logger.warn("[PropertySync]", `${ip}: Sync exception for ${req.eoj} ${req.propertyName}`, {exception: e});
+    }
+  }
+
+  /**
    * タイマーループで実行される同期処理
    */
   private async processSyncLoop(): Promise<void> {
@@ -276,64 +325,34 @@ export class PropertySyncManager {
         return;
       }
 
+      // ローカル変数に代入（TypeScriptのnullチェック対策）
+      const deviceStore = this.deviceStore;
+      const requestDevicePropertyFn = this.requestDevicePropertyFn;
+
       // 全デバイスをIPごとにグループ化
       const devicesByIp = new Map<string, any[]>();
-      for (const device of this.deviceStore.getAll()) {
+      for (const device of deviceStore.getAll()) {
         if (!devicesByIp.has(device.ip)) {
           devicesByIp.set(device.ip, []);
         }
         devicesByIp.get(device.ip)!.push(device);
       }
 
-      // IPごとに更新リクエストを生成して実行
-      for (const [ip, devices] of devicesByIp) {
-        const updateRequests = this.checkAndRequestUpdates(ip, this.deviceStore);
+      // IPごとに並列で更新リクエストを実行（IP内のプロパティは直列でデバイス保護）
+      await Promise.all(
+        Array.from(devicesByIp.entries()).map(async ([ip, devices]) => {
+          const updateRequests = this.checkAndRequestUpdates(ip, deviceStore);
 
-        if (updateRequests.length > 0) {
-          Logger.debug("[PropertySync]", `${ip}: Processing ${updateRequests.length} property sync requests`);
+          if (updateRequests.length > 0) {
+            Logger.debug("[PropertySync]", `${ip}: Processing ${updateRequests.length} property sync requests`);
 
-          for (const req of updateRequests) {
-            // デバイスを検索してDeviceIdを作成
-            const device = this.deviceStore.getAll().find(d => d.ip === req.ip && d.eoj === req.eoj);
-            if (!device) {
-              Logger.warn("[PropertySync]", `${ip}: Device not found for ${req.eoj}`);
-              continue;
-            }
-
-            const deviceId = {
-              id: device.id,
-              ip: device.ip,
-              eoj: device.eoj,
-              internalId: device.internalId
-            };
-
-            Logger.debug("[PropertySync]", `${ip}: Requesting sync for ${req.eoj} ${req.propertyName}`);
-
-            try {
-              // requestDevicePropertyをbackground優先度で実行
-              await this.requestDevicePropertyFn(deviceId, req.propertyName, {
-                priority: 'background',
-                retryCount: 0,
-                retryDelay: 0,
-                onSuccess: () => {
-                  // 成功時: PropertySyncManagerに成功を通知
-                  this.markAsUpdated(req.ip, req.eoj, req.propertyName);
-                  Logger.debug("[PropertySync]", `${ip}: Sync success for ${req.eoj} ${req.propertyName}`);
-                },
-                onFailure: () => {
-                  // 失敗時: バックオフを増加
-                  this.markAsFailed(req.ip, req.eoj, req.propertyName);
-                  Logger.debug("[PropertySync]", `${ip}: Sync failed for ${req.eoj} ${req.propertyName}, backoff increased`);
-                }
-              });
-            } catch (e) {
-              // 例外時もバックオフを増加
-              this.markAsFailed(req.ip, req.eoj, req.propertyName);
-              Logger.warn("[PropertySync]", `${ip}: Sync exception for ${req.eoj} ${req.propertyName}`, {exception: e});
+            // 同一IP内のプロパティは直列実行（デバイス保護）
+            for (const req of updateRequests) {
+              await this.processSingleSyncRequest(req, ip, deviceStore, requestDevicePropertyFn);
             }
           }
-        }
-      }
+        })
+      );
     });
   }
 }
