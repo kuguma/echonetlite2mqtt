@@ -500,219 +500,249 @@ export class EchoNetLiteRawController {
 
 
 
+  /**
+   * INFキューを処理し、デバイス検出とプロパティ値更新を行う（コアループのサブルーチン）
+   */
+  private async processInfQueue(ip: string, queue: ReturnType<typeof this.getOrCreateIpQueue>): Promise<number> {
+    let infProcessed = 0;
+    while (queue.infQueue.length > 0) {
+      const inf = queue.infQueue.shift();
+      if (inf === undefined) {
+        throw Error("ありえない");
+      }
+      infProcessed++;
+
+      const foundNode = this.nodes.find(_ => _.ip === inf.rinfo.address);
+
+      // 新規ノードまたは既存ノードのd5処理
+      if ("d5" in inf.els.DETAILs) {
+        await this.handleD5Notification(inf, foundNode);
+        if (foundNode === undefined) {
+          continue; // 新規ノードの場合、プロパティ更新はスキップ
+        }
+      }
+
+      if (foundNode === undefined) {
+        continue; // d5がない新規ノードは無視
+      }
+
+      // プロパティ値更新処理
+      await this.updatePropertiesFromInf(inf, foundNode);
+    }
+
+    if(infProcessed > 0) {
+      Logger.debug("[ECHONETLite][queue]", `${ip}: Processed ${infProcessed} INF items`);
+    }
+    return infProcessed;
+  }
+
+  /**
+   * d5(自ノードインスタンスリスト通知)を処理
+   */
+  private async handleD5Notification(inf: Response, foundNode: RawNode | undefined): Promise<void> {
+    const eojList = EchoNetLiteRawController.convertToInstanceList(inf.els.DETAILs["d5"]);
+
+    // 既存ノードの場合、新しいデバイスがあるかチェック
+    if (foundNode !== undefined) {
+      const hasNewDevices = eojList.some(newEoj =>
+        foundNode.devices.find(currentDevice => currentDevice.eoj === newEoj) === undefined
+      );
+      if (!hasNewDevices) {
+        return; // 新しいデバイスがなければスキップ
+      }
+      Logger.debug("[ECHONETLite][queue]", `${inf.rinfo.address}: Processing INF d5 (device update)`);
+    } else {
+      Logger.debug("[ECHONETLite][queue]", `${inf.rinfo.address}: Processing INF d5 (new node discovery)`);
+    }
+
+    // ノード構造を作成
+    const nodeTemp: RawNode = {
+      ip: inf.rinfo.address,
+      devices: [{
+        ip: inf.rinfo.address,
+        eoj: "0ef001",
+        properties: [],
+        noExistsId: false
+      }]
+    };
+
+    eojList.forEach(eoj => {
+      nodeTemp.devices.push({
+        ip: inf.rinfo.address,
+        eoj: eoj,
+        properties: [],
+        noExistsId: false
+      });
+    });
+
+    // 排他制御付きでノード詳細を取得
+    const newNode = await this.getNewNodeWithLock(nodeTemp);
+    await this.updateOrAddNode(newNode);
+    this.fireDeviceDetected(newNode.ip, newNode.devices.map(_=>_.eoj));
+  }
+
+  /**
+   * INFメッセージからプロパティ値を更新
+   */
+  private async updatePropertiesFromInf(inf: Response, foundNode: RawNode): Promise<void> {
+    const foundDevice = foundNode.devices.find(_ => _.eoj === inf.els.SEOJ);
+    if (foundDevice === undefined) {
+      return; // 存在しないデバイスは無視
+    }
+
+    for (const epc in inf.els.DETAILs) {
+      const foundProperty = foundDevice.properties.find(_ => _.epc === epc);
+      if (foundProperty === undefined) {
+        continue; // 存在しないプロパティは無視
+      }
+
+      const oldValue = foundProperty.value;
+      foundProperty.value = inf.els.DETAILs[epc];
+
+      // イベントを発火
+      this.firePropertyChanged(
+        foundProperty.ip,
+        foundProperty.eoj,
+        foundProperty.epc,
+        oldValue,
+        foundProperty.value);
+    }
+  }
+
+  /**
+   * sendQueueを処理し、コマンドを送信してレスポンスを処理
+   */
+  private async processSendQueue(ip: string, queue: ReturnType<typeof this.getOrCreateIpQueue>): Promise<number> {
+    let sendProcessed = 0;
+    while (queue.sendQueue.length > 0) {
+      const command = queue.sendQueue.shift();
+      if (command === undefined) {
+        throw Error("ありえない");
+      }
+      sendProcessed++;
+      Logger.debug("[ECHONETLite][queue]", `${ip}: Sending command ${command.seoj}->${command.deoj} ESV=${command.esv} EPC=${command.epc}`);
+
+      // コマンド送信
+      const res = await this.sendCommand(command);
+
+      // GET_RESの場合は値を更新
+      if (res !== undefined) {
+        this.updatePropertiesFromResponse(res);
+      }
+
+      // コールバック実行
+      if(command.callback !== undefined) {
+        command.callback(res !== undefined ? res : new CommandResponse(command));
+      }
+    }
+
+    if(sendProcessed > 0) {
+      Logger.debug("[ECHONETLite][queue]", `${ip}: Processed ${sendProcessed} command items`);
+    }
+    return sendProcessed;
+  }
+
+  /**
+   * コマンドを送信（タイムアウト処理込み）
+   */
+  private async sendCommand(command: CommandWithCallback): Promise<CommandResponse | undefined> {
+    try {
+      return await EchoNetCommunicator.execCommandPromise(
+        command.ip,
+        command.seoj,
+        command.deoj,
+        command.esv,
+        command.epc,
+        command.edt);
+    } catch(e) {
+      Logger.warn("[ECHONETLite][raw]", `error send command: timeout ${command.ip} ${command.seoj} ${command.deoj} ${command.esv} ${command.epc} ${command.edt}`, {exception:e});
+      return undefined;
+    }
+  }
+
+  /**
+   * GET_RESレスポンスからプロパティ値を更新（コアループのサブルーチン）
+   */
+  private updatePropertiesFromResponse(res: CommandResponse): void {
+    res.responses.forEach((response):void => {
+      if(response.els.ESV !== ELSV.GET_RES) {
+        return;
+      }
+
+      const ip  = response.rinfo.address;
+      const eoj = response.els.SEOJ;
+      const els = response.els;
+
+      for(const epc in els.DETAILs) {
+        const newValue = els.DETAILs[epc];
+        const matchProperty = this.findProperty(ip, eoj, epc);
+        if (matchProperty === undefined) {
+          continue;
+        }
+
+        const oldValue = matchProperty.value;
+        matchProperty.value = newValue;
+
+        // イベントを発火
+        this.firePropertyChanged(
+          matchProperty.ip,
+          matchProperty.eoj,
+          matchProperty.epc,
+          oldValue,
+          matchProperty.value);
+      }
+    });
+  }
+
+  /**
+   * PropertySyncのリクエストを生成してキューに追加（コアループのサブルーチン）
+   */
+  private async processPropertySync(ip: string, queue: ReturnType<typeof this.getOrCreateIpQueue>): Promise<void> {
+    // キューが空でPropertySyncが有効な場合のみ実行
+    if (queue.infQueue.length > 0 || queue.sendQueue.length > 0) {
+      return;
+    }
+    if (!this.propertySyncManager || !this.deviceStore) {
+      return;
+    }
+
+    const updateRequests = this.propertySyncManager.checkAndRequestUpdates(ip, this.deviceStore);
+    if (updateRequests.length === 0) {
+      return;
+    }
+
+    Logger.debug("[ECHONETLite][sync]", `${ip}: Processing ${updateRequests.length} property sync requests`);
+
+    for (const req of updateRequests) {
+      // 問い合わせ中状態にマーク
+      this.propertySyncManager.markAsUpdating(req.ip, req.eoj, req.propertyName);
+
+      // requestGet()を使用（重複排除機能あり、重複時は空のレスポンスを返す）
+      this.requestGet(req.ip, "0ef001", req.eoj, req.epc);
+
+      Logger.debug("[ECHONETLite][sync]", `${ip}: Queued sync request for ${req.eoj} ${req.epc} (${req.propertyName})`);
+    }
+  }
+
+  // コアループ。デバイスごとに単一のキューを使って処理を直列化する。
   private processQueueForIp = async (ip: string):Promise<void> =>{
     const queue = this.getOrCreateIpQueue(ip);
-    
+
     if (queue.processing) {
       Logger.debug("[ECHONETLite][queue]", `${ip}: Already processing, skipped`);
       return;
     }
     queue.processing = true;
-    
+
     const startTime = Date.now();
     const initialInfCount = queue.infQueue.length;
     const initialSendCount = queue.sendQueue.length;
     Logger.debug("[ECHONETLite][queue]", `${ip}: Start processing (inf=${initialInfCount}, send=${initialSendCount})`);
-    
+
     try {
-      // infから先に処理する
-      let infProcessed = 0;
-      while (queue.infQueue.length > 0) {
-        const inf = queue.infQueue.shift();
-        if (inf === undefined) {
-          throw Error("ありえない");
-        }
-        infProcessed++;
-
-        const foundNode = this.nodes.find(_ => _.ip === inf.rinfo.address);
-        if (foundNode === undefined) {
-          // 新たなノードからの通知で、d5(自ノードインスタンスリスト通知)ならば、新しいノードを追加する
-          if ("d5" in inf.els.DETAILs) {
-            Logger.debug("[ECHONETLite][queue]", `${ip}: Processing INF d5 (new node discovery)`);
-            const nodeTemp: RawNode = {
-              ip: inf.rinfo.address,
-              devices: [{
-                ip: inf.rinfo.address,
-                eoj: "0ef001",
-                properties: [],
-                noExistsId: false
-              }]
-            };
-            const eojList = EchoNetLiteRawController.convertToInstanceList(inf.els.DETAILs["d5"]);
-            eojList.forEach(eoj => {
-              nodeTemp.devices.push({
-                ip: inf.rinfo.address,
-                eoj: eoj,
-                properties: [],
-                noExistsId: false
-              });
-            });
-
-            // ノート応答が遅い場合ここで待たされることになるが、一旦あきらめる
-            // 排他制御付きでノード詳細を取得
-            const newNode = await this.getNewNodeWithLock(nodeTemp);
-            await this.updateOrAddNode(newNode);
-            this.fireDeviceDetected(newNode.ip, newNode.devices.map(_=>_.eoj));
-          }
-          continue;
-        }
-        else
-        {
-          // 既存ノードからのd5通知(自ノードインスタンスリスト通知)ならば、デバイスが増えていたら再取得する
-          if ("d5" in inf.els.DETAILs) 
-          {
-            const nodeTemp: RawNode = {
-              ip: inf.rinfo.address,
-              devices: [{
-                ip: inf.rinfo.address,
-                eoj: "0ef001",
-                properties: [],
-                noExistsId: false
-              }]
-            };
-            const eojList = EchoNetLiteRawController.convertToInstanceList(inf.els.DETAILs["d5"]);
-
-            if(eojList.filter(newEoj=>foundNode.devices.find(currentDevice=>currentDevice.eoj === newEoj) === undefined).length === 0)
-            {
-              continue;
-            }
-
-            Logger.debug("[ECHONETLite][queue]", `${ip}: Processing INF d5 (device update)`);
-            eojList.forEach(eoj => {
-              nodeTemp.devices.push({
-                ip: inf.rinfo.address,
-                eoj: eoj,
-                properties: [],
-                noExistsId: false
-              });
-            });
-
-            // 排他制御付きでノード詳細を取得
-            const newNode = await this.getNewNodeWithLock(nodeTemp);
-            await this.updateOrAddNode(newNode);
-            this.fireDeviceDetected(newNode.ip, newNode.devices.map(_=>_.eoj));
-
-          }
-        }
-        const foundDevice = foundNode.devices.find(_ => _.eoj === inf.els.SEOJ);
-        if (foundDevice === undefined) {
-          // 存在しないデバイスは無視する
-          continue;
-        }
-        for (const epc in inf.els.DETAILs) {
-          const foundProperty = foundDevice.properties.find(_ => _.epc === epc);
-          if (foundProperty === undefined) {
-            // 存在しないプロパティは無視する
-            continue;
-          }
-
-          const oldValue = foundProperty.value;
-
-          // 値を更新する
-          foundProperty.value = inf.els.DETAILs[epc];
-
-          // イベントを発火する
-          this.firePropertyChanged(
-            foundProperty.ip, 
-            foundProperty.eoj, 
-            foundProperty.epc, 
-            oldValue, 
-            foundProperty.value);
-        }
-      }
-      if(infProcessed > 0) {
-        Logger.debug("[ECHONETLite][queue]", `${ip}: Processed ${infProcessed} INF items`);
-      }
-
-      let sendProcessed = 0;
-      while (queue.sendQueue.length > 0) {
-        const command = queue.sendQueue.shift();
-        if (command === undefined) {
-          throw Error("ありえない");
-        }
-        sendProcessed++;
-        Logger.debug("[ECHONETLite][queue]", `${ip}: Sending command ${command.seoj}->${command.deoj} ESV=${command.esv} EPC=${command.epc}`);
-        
-        let res: CommandResponse;
-        try
-        {
-          res = await EchoNetCommunicator.execCommandPromise(
-            command.ip,
-            command.seoj,
-            command.deoj,
-            command.esv,
-            command.epc,
-            command.edt);
-        }
-        catch(e)
-        {
-          Logger.warn("[ECHONETLite][raw]", `error send command: timeout ${command.ip} ${command.seoj} ${command.deoj} ${command.esv} ${command.epc} ${command.edt}`, {exception:e});
-          if(command.callback !== undefined)
-          {
-            command.callback(new CommandResponse(command));
-          }
-          continue;
-        }
-
-        // GET_RESの場合は、値を更新する
-        res.responses.forEach((response):void => {
-          if(response.els.ESV !== ELSV.GET_RES)
-          {
-            return;
-          }
-          const ip  = response.rinfo.address;
-          const eoj = response.els.SEOJ;
-          const els = response.els;
-
-          for(const epc in els.DETAILs)
-          {
-            const newValue = els.DETAILs[epc];
-
-            const matchProperty = this.findProperty(ip, eoj, epc);
-            if (matchProperty === undefined) {
-              continue;
-            }
-
-            const oldValue = matchProperty.value;
-            matchProperty.value = newValue;
-
-            // イベントを発火する
-            this.firePropertyChanged(
-              matchProperty.ip,
-              matchProperty.eoj,
-              matchProperty.epc,
-              oldValue,
-              matchProperty.value);
-          }
-        });
-
-        if(command.callback !== undefined)
-        {
-          command.callback(res);
-        }
-      }
-      if(sendProcessed > 0) {
-        Logger.debug("[ECHONETLite][queue]", `${ip}: Processed ${sendProcessed} command items`);
-      }
-
-      // PropertySync: infQueue/sendQueueが空の場合のみ、プロパティ同期をチェック
-      if (queue.infQueue.length === 0 && queue.sendQueue.length === 0 && this.propertySyncManager && this.deviceStore) {
-        const updateRequests = this.propertySyncManager.checkAndRequestUpdates(ip, this.deviceStore);
-
-        if (updateRequests.length > 0) {
-          Logger.debug("[ECHONETLite][sync]", `${ip}: Processing ${updateRequests.length} property sync requests`);
-
-          for (const req of updateRequests) {
-            // 問い合わせ中状態にマーク
-            this.propertySyncManager.markAsUpdating(req.ip, req.eoj, req.propertyName);
-
-            // requestGet()を使用（重複排除機能あり、重複時は空のレスポンスを返す）
-            this.requestGet(req.ip, "0ef001", req.eoj, req.epc);
-
-            Logger.debug("[ECHONETLite][sync]", `${ip}: Queued sync request for ${req.eoj} ${req.epc} (${req.propertyName})`);
-          }
-        }
-      }
+      await this.processInfQueue(ip, queue);
+      await this.processSendQueue(ip, queue);
+      await this.processPropertySync(ip, queue);
     }
     finally {
       queue.processing = false;
@@ -720,6 +750,7 @@ export class EchoNetLiteRawController {
       Logger.debug("[ECHONETLite][queue]", `${ip}: Finished processing in ${elapsed}ms (remaining: inf=${queue.infQueue.length}, send=${queue.sendQueue.length})`);
     }
 
+    // キューにまだアイテムがあれば次の処理をスケジュール
     if (queue.infQueue.length > 0 || queue.sendQueue.length > 0) {
       Logger.debug("[ECHONETLite][queue]", `${ip}: More items in queue (inf=${queue.infQueue.length}, send=${queue.sendQueue.length}), scheduling next processing`);
       setTimeout(() => this.processQueueForIp(ip), 1);
