@@ -338,21 +338,20 @@ export class PropertySyncManager {
         devicesByIp.get(device.ip)!.push(device);
       }
 
-      // IPごとに並列で更新リクエストを実行（IP内のプロパティは直列でデバイス保護）
-      await Promise.all(
-        Array.from(devicesByIp.entries()).map(async ([ip, devices]) => {
-          const updateRequests = this.checkAndRequestUpdates(ip, deviceStore);
+      // 全デバイス・全プロパティをfire-and-forgetで投げる
+      // 重複排除により実際のデバイス負荷は制御される
+      // 遅いデバイスが速いデバイスをブロックしない
+      devicesByIp.forEach((devices, ip) => {
+        const updateRequests = this.checkAndRequestUpdates(ip, deviceStore);
 
-          if (updateRequests.length > 0) {
-            Logger.debug("[PropertySync]", `${ip}: Processing ${updateRequests.length} property sync requests`);
+        if (updateRequests.length > 0) {
+          Logger.debug("[PropertySync]", `${ip}: Launching ${updateRequests.length} property sync requests (fire-and-forget)`);
 
-            // 同一IP内のプロパティは直列実行（デバイス保護）
-            for (const req of updateRequests) {
-              await this.processSingleSyncRequest(req, ip, deviceStore, requestDevicePropertyFn);
-            }
-          }
-        })
-      );
+          updateRequests.forEach(req => {
+            this.processSingleSyncRequest(req, ip, deviceStore, requestDevicePropertyFn);
+          });
+        }
+      });
     });
   }
 }
