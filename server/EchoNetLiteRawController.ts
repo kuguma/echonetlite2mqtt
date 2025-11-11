@@ -1,6 +1,7 @@
 import { DeviceDetailsType, eldata,rinfo } from "echonet-lite";
 import { Command, CommandResponse, Response, ELSV, EchoNetCommunicator, RawDataSet } from "./EchoNetCommunicator";
 import { Logger } from "./Logger";
+import { Mutex } from "async-mutex";
 
 
 export interface CommandWithCallback extends Command
@@ -10,7 +11,7 @@ export interface CommandWithCallback extends Command
 
 export class EchoNetLiteRawController {
   private readonly nodes: RawNode[] = [];
-  private nodesUpdateLock: Promise<void> = Promise.resolve();
+  private readonly nodesUpdateMutex = new Mutex();
 
   // IP別のキュー構造
   private readonly ipQueues: Map<string, {
@@ -28,7 +29,7 @@ export class EchoNetLiteRawController {
 
   // デバイス収集の排他制御（ノードIP別）
   // 同一ノードに対する並行getNewNode呼び出しを防ぎ、デバイス保護を維持
-  private readonly deviceCollectionLocks: Map<string, Promise<void>> = new Map();
+  private readonly deviceCollectionMutexes: Map<string, Mutex> = new Map();
 
   // IP別キューの取得または作成
   private getOrCreateIpQueue(ip: string) {
@@ -47,24 +48,14 @@ export class EchoNetLiteRawController {
 
   // ノード更新の排他制御
   private async updateOrAddNode(newNode: RawNode): Promise<void> {
-    // 前の更新処理が完了するまで待つ
-    await this.nodesUpdateLock;
-
-    // 新しい更新処理を開始
-    let resolve: () => void;
-    this.nodesUpdateLock = new Promise(r => resolve = r);
-
-    try {
+    return this.nodesUpdateMutex.runExclusive(() => {
       const currentIndex = this.nodes.findIndex(_ => _.ip === newNode.ip);
       if (currentIndex === -1) {
         this.nodes.push(newNode);
       } else {
         this.nodes[currentIndex] = newNode;
       }
-    } finally {
-      // 更新完了を通知
-      resolve!();
-    }
+    });
   }
 
   // デバイス収集の排他制御（ノードIP別）
@@ -72,28 +63,18 @@ export class EchoNetLiteRawController {
   private async getNewNodeWithLock(node: RawNode): Promise<RawNode> {
     const nodeKey = node.ip;
 
-    // 同一IPに対する既存の収集処理が完了するまで待つ
-    const existingLock = this.deviceCollectionLocks.get(nodeKey);
-    if (existingLock !== undefined) {
-      Logger.debug("[ECHONETLite][lock]", `Waiting for existing collection to complete for ${nodeKey}`);
-      await existingLock;
+    // IP別のMutexを取得または作成
+    if (!this.deviceCollectionMutexes.has(nodeKey)) {
+      this.deviceCollectionMutexes.set(nodeKey, new Mutex());
     }
+    const mutex = this.deviceCollectionMutexes.get(nodeKey)!;
 
-    // 新しいロックを作成
-    let resolve: () => void;
-    const newLock = new Promise<void>(r => resolve = r!);
-    this.deviceCollectionLocks.set(nodeKey, newLock);
-
-    try {
+    return mutex.runExclusive(async () => {
       Logger.debug("[ECHONETLite][lock]", `Starting device collection for ${nodeKey}`);
       const result = await EchoNetLiteRawController.getNewNode(node);
       Logger.debug("[ECHONETLite][lock]", `Completed device collection for ${nodeKey}`);
       return result;
-    } finally {
-      // ロックを解除
-      this.deviceCollectionLocks.delete(nodeKey);
-      resolve!();
-    }
+    });
   }
 
   constructor() {
@@ -807,6 +788,8 @@ export class EchoNetLiteRawController {
       "",
       5000);
 
+    Logger.info("[ECHONETLite][discovery]", `Received ${res.responses.length} responses from multicast`);
+
     // 取得結果から、ノードを作成する
     var nodesTemp = res.responses.map((response): RawNode|undefined => {
       if(response.els.ESV !== ELSV.GET_RES)
@@ -840,7 +823,8 @@ export class EchoNetLiteRawController {
 
     // ノードの詳細を取得する（ノード間は並列処理）
     const startTime = Date.now();
-    Logger.info("[ECHONETLite][discovery]", `Starting parallel node discovery for ${nodesTemp.length} nodes`);
+    const nodeIps = nodesTemp.map(n => n?.ip).join(", ");
+    Logger.info("[ECHONETLite][discovery]", `Starting parallel node discovery for ${nodesTemp.length} nodes: [${nodeIps}]`);
 
     const newNodesResults = await Promise.allSettled(
       nodesTemp.map(async (node) => {
