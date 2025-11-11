@@ -392,12 +392,15 @@ export class EchoNetLiteController{
 
     if(this.knownDeviceIpList.length > 0)
     {
-      for(const ip of this.knownDeviceIpList)
-      {
-        Logger.info("[ECHONETLite]", `collecting devices from ${ip}`);
-        await this.echonetLiteRawController.searchDeviceFromIp(ip);
-      }
-      Logger.info("[ECHONETLite]", `done collecting devices`);
+      Logger.info("[ECHONETLite]", `collecting devices from ${this.knownDeviceIpList.length} known IPs (parallel)`);
+      const results = await Promise.allSettled(
+        this.knownDeviceIpList.map(ip =>
+          this.echonetLiteRawController.searchDeviceFromIp(ip)
+        )
+      );
+      const successCount = results.filter(r => r.status === "fulfilled").length;
+      const failCount = results.filter(r => r.status === "rejected").length;
+      Logger.info("[ECHONETLite]", `done collecting devices (success=${successCount}, failed=${failCount})`);
     }
     if(this.searchDevices)
     {

@@ -10,7 +10,8 @@ export interface CommandWithCallback extends Command
 
 export class EchoNetLiteRawController {
   private readonly nodes: RawNode[] = [];
-  
+  private nodesUpdateLock: Promise<void> = Promise.resolve();
+
   // IP別のキュー構造
   private readonly ipQueues: Map<string, {
     infQueue: Response[];
@@ -32,6 +33,28 @@ export class EchoNetLiteRawController {
       this.ipQueues.set(ip, queue);
     }
     return queue;
+  }
+
+  // ノード更新の排他制御
+  private async updateOrAddNode(newNode: RawNode): Promise<void> {
+    // 前の更新処理が完了するまで待つ
+    await this.nodesUpdateLock;
+
+    // 新しい更新処理を開始
+    let resolve: () => void;
+    this.nodesUpdateLock = new Promise(r => resolve = r);
+
+    try {
+      const currentIndex = this.nodes.findIndex(_ => _.ip === newNode.ip);
+      if (currentIndex === -1) {
+        this.nodes.push(newNode);
+      } else {
+        this.nodes[currentIndex] = newNode;
+      }
+    } finally {
+      // 更新完了を通知
+      resolve!();
+    }
   }
 
   constructor() {
@@ -154,130 +177,113 @@ export class EchoNetLiteRawController {
     return response.els.DETAILs[epc];
   }
 
-  private static async getNewNode(node: RawNode): Promise<RawNode> {
-    const result: RawNode = {
-      ip: node.ip,
-      devices: node.devices.map(_ => ({
-        ip: _.ip,
-        eoj: _.eoj,
-        properties: [],
-        noExistsId: false
-      }))
-    };
-
-    // GET/SET/INFのプロパティマップを受信する
-    for (const device of result.devices)
+  // 単一デバイスの詳細情報を収集（内部は直列処理でデバイス保護）
+  private static async collectDeviceDetails(device: RawDevice, nodeIp: string): Promise<void> {
+    // GET/SET/INFのプロパティマップを受信する（単一デバイスに対しては直列実行）
+    for(const epc of ["9f", "9e", "9d"])
     {
-      for(const epc of ["9f", "9e", "9d"])
+      let res: CommandResponse;
+      try
       {
-        let res: CommandResponse;
-        try
-        {
-          res = await EchoNetCommunicator.execCommandPromise(result.ip, "0ef001", device.eoj, ELSV.GET, epc, "");
+        res = await EchoNetCommunicator.execCommandPromise(nodeIp, "0ef001", device.eoj, ELSV.GET, epc, "");
+      }
+      catch(e)
+      {
+        Logger.warn("[ECHONETLite][raw]", `error collectDeviceDetails: get ${epc}: exception from ${nodeIp},${device.eoj}`, {exception:e});
+        continue;
+      }
+      const response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && (epc in _.els.DETAILs));
+      if(response === undefined)
+      {
+        Logger.warn("[ECHONETLite][raw]", `error collectDeviceDetails: get ${epc} from ${nodeIp},${device.eoj}`, {responses:res.responses, command:res.command});
+        continue;
+      }
+
+      const edt = response.els.DETAILs;
+      const data = edt[epc];
+      const propertyList = EchoNetLiteRawController.convertToPropertyList(data);
+      if(propertyList === undefined)
+      {
+        Logger.warn("[ECHONETLite][raw]", `error collectDeviceDetails: get ${epc}: invalid receive data ${nodeIp},${device.eoj} ${JSON.stringify(edt)}`, {responses:res.responses, command:res.command});
+        continue;
+      }
+      for(const propertyMapEpc of propertyList)
+      {
+        let matchProperty = device.properties.find(_ => _.epc === propertyMapEpc);
+        if (matchProperty === undefined) {
+          matchProperty = {
+            ip: nodeIp,
+            eoj: device.eoj,
+            epc: propertyMapEpc,
+            value: "",
+            operation: {
+              get: false,
+              set: false,
+              inf: false
+            }
+          };
+          device.properties.push(matchProperty);
         }
-        catch(e)
-        {
-          Logger.warn("[ECHONETLite][raw]", `error getNewNode: get ${epc}: exception from ${result.ip},${device.eoj}`, {exception:e});
-          continue;
+        if(epc === "9f"){
+          matchProperty.operation.get = true;
         }
-        const response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && (epc in _.els.DETAILs));
-        if(response === undefined)
-        {
-          Logger.warn("[ECHONETLite][raw]", `error getNewNode: get ${epc} from ${result.ip},${device.eoj}`, {responses:res.responses, command:res.command});
-          continue;
+        if(epc === "9e"){
+          matchProperty.operation.set = true;
+        }
+        if(epc === "9d"){
+          matchProperty.operation.inf = true;
+        }
+      }
+
+      // 受信したデータをプロパティとして格納する
+      for (const epc in edt) {
+        let matchProperty = device.properties.find(_ => _.epc === epc);
+        if (matchProperty === undefined) {
+          matchProperty = {
+            ip: nodeIp,
+            eoj: device.eoj,
+            epc: epc,
+            value: "",
+            operation: {
+              get: false,
+              set: false,
+              inf: false
+            }
+          };
+          device.properties.push(matchProperty);
         }
 
-        const edt = response.els.DETAILs;
-        const data = edt[epc];
-        const propertyList = EchoNetLiteRawController.convertToPropertyList(data);
-        if(propertyList === undefined)
-        {
-          Logger.warn("[ECHONETLite][raw]", `error getNewNode: get ${epc}: invalid reveive data ${result.ip},${device.eoj} ${JSON.stringify(edt)}`, {responses:res.responses, command:res.command});
-          continue;
-        }
-        for(const propertyMapEpc of propertyList)
-        {
-          let matchProperty = device.properties.find(_ => _.epc === propertyMapEpc);
-          if (matchProperty === undefined) {
-            matchProperty = {
-              ip: result.ip,
-              eoj: device.eoj,
-              epc: propertyMapEpc,
-              value: "",
-              operation: {
-                get: false,
-                set: false,
-                inf: false
-              }
-            };
-            device.properties.push(matchProperty);
-          }
-          if(epc === "9f"){
-            matchProperty.operation.get = true;
-          }
-          if(epc === "9e"){
-            matchProperty.operation.set = true;
-          }
-          if(epc === "9d"){
-            matchProperty.operation.inf = true;
-          }
-        }
-        
-        // 受信したデータをプロパティとして格納する
-        for (const epc in edt) {
-          let matchProperty = device.properties.find(_ => _.epc === epc);
-          if (matchProperty === undefined) {
-            matchProperty = {
-              ip: result.ip,
-              eoj: device.eoj,
-              epc: epc,
-              value: "",
-              operation: {
-                get: false,
-                set: false,
-                inf: false
-              }
-            };
-            device.properties.push(matchProperty);
-          }
-
-          matchProperty.value = edt[epc];
-        }
+        matchProperty.value = edt[epc];
       }
     }
 
     // 取得していないgetプロパティを取得する
-    for (const device of result.devices) {
-      const epcList = device.properties.filter(_ => _.operation.get).filter(_ => _.value === "").map(_ => _.epc);
-      for (const epc of epcList) {
-        const value = await EchoNetLiteRawController.getProperty(result.ip, device.eoj, epc);
-        if (value === undefined) {
-          continue;
-        }
-        const matchProperty = device.properties.find(_ => _.epc === epc);
-        if (matchProperty === undefined) {
-          throw Error("ありえない");
-        }
-        matchProperty.value = value;
+    const epcList = device.properties.filter(_ => _.operation.get).filter(_ => _.value === "").map(_ => _.epc);
+    for (const epc of epcList) {
+      const value = await EchoNetLiteRawController.getProperty(nodeIp, device.eoj, epc);
+      if (value === undefined) {
+        continue;
       }
+      const matchProperty = device.properties.find(_ => _.epc === epc);
+      if (matchProperty === undefined) {
+        throw Error("ありえない");
+      }
+      matchProperty.value = value;
     }
 
     // 83 (識別番号)を取得していないのなら取得する
     // 本来、9f (getプロパティリスト)にないなら取得する必要はないのだが、過去バージョンでは9fに関わらずgetしていたので
     // 互換性のために取得する。
     // なお、9fに無くても、要求すると83を取得できるデバイスもある。
-    for (const device of result.devices) {
-      const idProperty = device.properties.find(_ => _.epc === "83");
-      if (idProperty !== undefined) {
-        continue;
-      }
+    const idProperty = device.properties.find(_ => _.epc === "83");
+    if (idProperty === undefined) {
       let res: CommandResponse;
       try {
         res = await EchoNetCommunicator.execCommandPromise(device.ip, '0ef001', device.eoj, ELSV.GET, "83", "");
       }
       catch (e) {
         device.noExistsId = true;
-        continue;
+        return;
       }
 
       const respose = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && ("83" in _.els.DETAILs));
@@ -286,13 +292,13 @@ export class EchoNetLiteRawController {
       {
         device.noExistsId = true;
       }
-      else 
+      else
       {
         const data = respose.els.DETAILs;
         let matchProperty = device.properties.find(_ => _.epc === "83");
         if (matchProperty === undefined) {
           matchProperty = {
-            ip: result.ip,
+            ip: nodeIp,
             eoj: device.eoj,
             epc: "83",
             value: "",
@@ -307,7 +313,25 @@ export class EchoNetLiteRawController {
         matchProperty.value = data["83"];
       }
     }
+  }
 
+  private static async getNewNode(node: RawNode): Promise<RawNode> {
+    const result: RawNode = {
+      ip: node.ip,
+      devices: node.devices.map(_ => ({
+        ip: _.ip,
+        eoj: _.eoj,
+        properties: [],
+        noExistsId: false
+      }))
+    };
+
+    // デバイス間は並列処理（デバイス内は直列でデバイス保護）
+    await Promise.allSettled(
+      result.devices.map(device => 
+        EchoNetLiteRawController.collectDeviceDetails(device, result.ip)
+      )
+    );
 
     return result;
   }
@@ -365,15 +389,7 @@ export class EchoNetLiteRawController {
 
             // ノート応答が遅い場合ここで待たされることになるが、一旦あきらめる
             const newNode = await EchoNetLiteRawController.getNewNode(nodeTemp);
-            const currentIndex = this.nodes.findIndex(_=>_.ip === newNode.ip);
-            if(currentIndex===-1)
-            {
-              this.nodes.push(newNode);
-            }
-            else
-            {
-              this.nodes[currentIndex] = newNode;
-            }
+            await this.updateOrAddNode(newNode);
             this.fireDeviceDetected(newNode.ip, newNode.devices.map(_=>_.eoj));
           }
           continue;
@@ -410,15 +426,7 @@ export class EchoNetLiteRawController {
             });
 
             const newNode = await EchoNetLiteRawController.getNewNode(nodeTemp);
-            const currentIndex = this.nodes.findIndex(_=>_.ip === newNode.ip);
-            if(currentIndex===-1)
-            {
-              this.nodes.push(newNode);
-            }
-            else
-            {
-              this.nodes[currentIndex] = newNode;
-            }
+            await this.updateOrAddNode(newNode);
             this.fireDeviceDetected(newNode.ip, newNode.devices.map(_=>_.eoj));
 
           }
@@ -579,18 +587,21 @@ export class EchoNetLiteRawController {
 
   public searchDeviceFromIp = async (ip:string):Promise<void> =>
   {
+    const startTime = Date.now();
+    Logger.debug("[ECHONETLite][discovery]", `Starting device discovery for ${ip}`);
+
     let res: CommandResponse;
     try {
       res = await EchoNetCommunicator.execCommandPromise(ip, '0ef001', '0ef001', ELSV.GET, "d6", "");
     }
     catch (e) {
-      Logger.warn("[ECHONETLite][raw]", `error searchDeviceFromIp: timeout ${ip} 0ef001 d6`, {exception:e});
+      Logger.warn("[ECHONETLite][discovery]", `Discovery failed for ${ip}: timeout`, {exception:e});
       return undefined;
     }
     const response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && ("d6" in _.els.DETAILs));
     if(response === undefined)
     {
-      Logger.warn("[ECHONETLite][raw]", `error searchDeviceFromIp: ${ip}`, {responses:res.responses, command:res.command});
+      Logger.warn("[ECHONETLite][discovery]", `Discovery failed for ${ip}: no valid response`, {responses:res.responses, command:res.command});
       return;
     }
 
@@ -605,6 +616,7 @@ export class EchoNetLiteRawController {
         }
       ]
     };
+    const deviceCount = EchoNetLiteRawController.convertToInstanceList(response.els.DETAILs["d6"]).length;
     EchoNetLiteRawController.convertToInstanceList(response.els.DETAILs["d6"]).forEach(eoj => {
       node.devices.push({
         ip: response.rinfo.address,
@@ -614,20 +626,15 @@ export class EchoNetLiteRawController {
       });
     });
 
+    Logger.debug("[ECHONETLite][discovery]", `Found ${deviceCount} devices on ${ip}, fetching details`);
+
     // ノードの詳細を取得する
     const newNode = await EchoNetLiteRawController.getNewNode(node);
-
-    const currentIndex = this.nodes.findIndex(_=>_.ip === newNode.ip);
-    if(currentIndex===-1)
-    {
-      this.nodes.push(newNode);
-    }
-    else
-    {
-      this.nodes[currentIndex] = newNode;
-    }
-
+    await this.updateOrAddNode(newNode);
     this.fireDeviceDetected(newNode.ip, newNode.devices.map(_=>_.eoj));
+
+    const elapsed = Date.now() - startTime;
+    Logger.info("[ECHONETLite][discovery]", `Device discovery for ${ip} completed in ${elapsed}ms (${deviceCount} devices)`);
   }
 
   public searchDevicesInNetwork = async (): Promise<void> =>{
@@ -673,24 +680,45 @@ export class EchoNetLiteRawController {
       return result;
     }).filter(_=>_!==undefined);
 
-    // ノードの詳細を取得する
-    for (const node of nodesTemp) {
-      if(node === undefined)
-      {
-        throw Error("ありえない");
+    // ノードの詳細を取得する（ノード間は並列処理）
+    const startTime = Date.now();
+    Logger.info("[ECHONETLite][discovery]", `Starting parallel node discovery for ${nodesTemp.length} nodes`);
+
+    const newNodesResults = await Promise.allSettled(
+      nodesTemp.map(async (node) => {
+        if(node === undefined) {
+          throw Error("ありえない");
+        }
+        const nodeStartTime = Date.now();
+        Logger.debug("[ECHONETLite][discovery]", `Starting node detail collection for ${node.ip}`);
+
+        const newNode = await EchoNetLiteRawController.getNewNode(node);
+
+        const nodeElapsed = Date.now() - nodeStartTime;
+        const deviceCount = newNode.devices.length;
+        Logger.info("[ECHONETLite][discovery]", `Node detail collection for ${node.ip} completed in ${nodeElapsed}ms (${deviceCount} devices)`);
+
+        return newNode;
+      })
+    );
+
+    // 結果を処理（こちらは順次処理で排他制御）
+    let successCount = 0;
+    let failCount = 0;
+    for (const result of newNodesResults) {
+      if (result.status === "fulfilled") {
+        const newNode = result.value;
+        await this.updateOrAddNode(newNode);
+        this.fireDeviceDetected(newNode.ip, newNode.devices.map(_=>_.eoj));
+        successCount++;
+      } else {
+        failCount++;
+        Logger.warn("[ECHONETLite][discovery]", `Node discovery failed: ${result.reason}`);
       }
-      const newNode = await EchoNetLiteRawController.getNewNode(node);
-      const currentIndex = this.nodes.findIndex(_=>_.ip === newNode.ip);
-      if(currentIndex===-1)
-      {
-        this.nodes.push(newNode);
-      }
-      else
-      {
-        this.nodes[currentIndex] = newNode;
-      }
-      this.fireDeviceDetected(newNode.ip, newNode.devices.map(_=>_.eoj));
     }
+
+    const totalElapsed = Date.now() - startTime;
+    Logger.info("[ECHONETLite][discovery]", `Network discovery completed in ${totalElapsed}ms (success=${successCount}, failed=${failCount})`);
   }
 
   private deviceDetectedListeners:((ip:string, eojList:string[])=>void)[] = [];
