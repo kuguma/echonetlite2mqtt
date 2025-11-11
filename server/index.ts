@@ -3,6 +3,7 @@ import { HoldOption, MqttController } from "./MqttController";
 import { DeviceStore } from "./DeviceStore";
 import { EchoNetLiteController } from "./EchoNetLiteController";
 import { RestApiController } from "./RestApiController";
+import { PropertySyncManager } from "./PropertySyncManager";
 import fs from "fs";
 import mqtt from "mqtt";
 import { SystemStatusRepositry } from "./ApiTypes";
@@ -831,4 +832,27 @@ if(mqttBroker === "")
   logger.output(`[MQTT] mqttBroker is not configured.`);
 }
 
-echoNetListController.start();
+echoNetListController.start().then(() => {
+  // PropertySync機能の開始
+  if(echonetPropertySyncConfigFile !== "" && fs.existsSync(echonetPropertySyncConfigFile))
+  {
+    const propertySyncManager = new PropertySyncManager(echonetCommandTimeout);
+    propertySyncManager.loadConfig(echonetPropertySyncConfigFile);
+
+    // DeviceStoreにPropertySyncManagerを設定
+    deviceStore.setPropertySyncManager(propertySyncManager);
+
+    // RawControllerにPropertySyncManagerとDeviceStoreを設定
+    echoNetListController.getRawController().setPropertySyncManager(propertySyncManager, deviceStore);
+
+    Logger.info("[PropertySync]", `PropertySync enabled with config: ${echonetPropertySyncConfigFile}`);
+  }
+  else if(echonetPropertySyncConfigFile !== "")
+  {
+    Logger.warn("[PropertySync]", `PropertySync config file not found: ${echonetPropertySyncConfigFile}`);
+  }
+  else
+  {
+    Logger.info("[PropertySync]", "PropertySync disabled (no config file specified)");
+  }
+});

@@ -2,6 +2,8 @@ import { DeviceDetailsType, eldata,rinfo } from "echonet-lite";
 import { Command, CommandResponse, Response, ELSV, EchoNetCommunicator, RawDataSet } from "./EchoNetCommunicator";
 import { Logger } from "./Logger";
 import { Mutex } from "async-mutex";
+import { PropertySyncManager } from "./PropertySyncManager";
+import { DeviceStore } from "./DeviceStore";
 
 
 export interface CommandWithCallback extends Command
@@ -12,12 +14,13 @@ export interface CommandWithCallback extends Command
 export class EchoNetLiteRawController {
   private readonly nodes: RawNode[] = [];
   private readonly nodesUpdateMutex = new Mutex();
+  private propertySyncManager?: PropertySyncManager;
+  private deviceStore?: DeviceStore;
 
   // IP別のキュー構造
   private readonly ipQueues: Map<string, {
     infQueue: Response[];
     sendQueue: CommandWithCallback[];
-    requestQueue: Command[];
     processing: boolean;
   }> = new Map();
 
@@ -38,12 +41,24 @@ export class EchoNetLiteRawController {
       queue = {
         infQueue: [],
         sendQueue: [],
-        requestQueue: [],
         processing: false
       };
       this.ipQueues.set(ip, queue);
     }
     return queue;
+  }
+
+  /**
+   * PropertySyncManagerを設定（index.tsから呼ばれる）
+   */
+  public setPropertySyncManager(manager: PropertySyncManager, deviceStore: DeviceStore): void {
+    this.propertySyncManager = manager;
+    this.deviceStore = deviceStore;
+    Logger.info("[PropertySync]", "PropertySyncManager registered with RawController");
+  }
+
+  public getPropertySyncManager(): PropertySyncManager | undefined {
+    return this.propertySyncManager;
   }
 
   // ノード更新の排他制御
@@ -657,17 +672,17 @@ export class EchoNetLiteRawController {
             if (matchProperty === undefined) {
               continue;
             }
-  
-            // const oldValue = matchProperty.value;
+
+            const oldValue = matchProperty.value;
             matchProperty.value = newValue;
-  
-            // // イベントを発火する
-            // this.firePropertyChanged(
-            //   matchProperty.ip, 
-            //   matchProperty.eoj, 
-            //   matchProperty.epc, 
-            //   oldValue, 
-            //   matchProperty.value);
+
+            // イベントを発火する
+            this.firePropertyChanged(
+              matchProperty.ip,
+              matchProperty.eoj,
+              matchProperty.epc,
+              oldValue,
+              matchProperty.value);
           }
         });
 
@@ -680,39 +695,24 @@ export class EchoNetLiteRawController {
         Logger.debug("[ECHONETLite][queue]", `${ip}: Processed ${sendProcessed} command items`);
       }
 
-      // Requestキューは優先度低め。他に処理が来たときは中断してそちらを優先する
-      // Requestキューは現在の実装では使われていない模様
-      // while (queue.requestQueue.length > 0) {
-      //   if(queue.infQueue.length > 0 || queue.sendQueue.length > 0)
-      //   {
-      //     break;
-      //   }
-      //   const command = queue.requestQueue.shift();
-      //   if(command === undefined)
-      //   {
-      //     throw Error("ありえない");
-      //   }
-        
-      //   const newValue = await EchoNetLiteRawController.getProperty(command.ip, command.deoj, command.epc);
-      //   if (newValue === undefined) {
-      //     continue;
-      //   }
-      //   const matchProperty = this.findProperty(command.ip, command.deoj, command.epc);
-      //   if (matchProperty === undefined) {
-      //     throw Error("ありえない");
-      //   }
+      // PropertySync: infQueue/sendQueueが空の場合のみ、プロパティ同期をチェック
+      if (queue.infQueue.length === 0 && queue.sendQueue.length === 0 && this.propertySyncManager && this.deviceStore) {
+        const updateRequests = this.propertySyncManager.checkAndRequestUpdates(ip, this.deviceStore);
 
-      //   const oldValue = matchProperty.value;
-      //   matchProperty.value = newValue;
+        if (updateRequests.length > 0) {
+          Logger.debug("[ECHONETLite][sync]", `${ip}: Processing ${updateRequests.length} property sync requests`);
 
-      //   // イベントを発火する
-      //   this.firePropertyChanged(
-      //     matchProperty.ip, 
-      //     matchProperty.eoj, 
-      //     matchProperty.epc, 
-      //     oldValue, 
-      //     matchProperty.value);
-      // }
+          for (const req of updateRequests) {
+            // 問い合わせ中状態にマーク
+            this.propertySyncManager.markAsUpdating(req.ip, req.eoj, req.propertyName);
+
+            // requestGet()を使用（重複排除機能あり、重複時は空のレスポンスを返す）
+            this.requestGet(req.ip, "0ef001", req.eoj, req.epc);
+
+            Logger.debug("[ECHONETLite][sync]", `${ip}: Queued sync request for ${req.eoj} ${req.epc} (${req.propertyName})`);
+          }
+        }
+      }
     }
     finally {
       queue.processing = false;
@@ -720,8 +720,8 @@ export class EchoNetLiteRawController {
       Logger.debug("[ECHONETLite][queue]", `${ip}: Finished processing in ${elapsed}ms (remaining: inf=${queue.infQueue.length}, send=${queue.sendQueue.length})`);
     }
 
-    if (queue.infQueue.length > 0 || queue.sendQueue.length > 0 || queue.requestQueue.length > 0) {
-      Logger.debug("[ECHONETLite][queue]", `${ip}: More items in queue, scheduling next processing`);
+    if (queue.infQueue.length > 0 || queue.sendQueue.length > 0) {
+      Logger.debug("[ECHONETLite][queue]", `${ip}: More items in queue (inf=${queue.infQueue.length}, send=${queue.sendQueue.length}), scheduling next processing`);
       setTimeout(() => this.processQueueForIp(ip), 1);
     }
   }
@@ -902,7 +902,7 @@ export class EchoNetLiteRawController {
     this.reveivedHandlers.forEach(_=>_(rinfo, els));
   }
 
-  
+
   public getSendQueueLength = ():number=>
   {
     return EchoNetCommunicator.getSendQueueLength();

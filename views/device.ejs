@@ -65,9 +65,10 @@
         <div class="row border-bottom border-dark">
           <div class="col col-md-1"></div>
           <div class="col col-md-2">Name</div>
-          <div class="col col-md-3">Description(ja)</div>
-          <div class="col col-md-2">Value</div>
+          <div class="col col-md-2">Description(ja)</div>
+          <div class="col col-md-1">Value</div>
           <div class="col col-md-2">Updated</div>
+          <div class="col col-md-2">Sync(Interval/Timeout)</div>
           <div class="col col-md-2">Operation</div>
         </div>
 
@@ -80,9 +81,10 @@
             </button>
           </div>
           <div class="col col-md-2 text-break"><p><%= prop.name %></p></div>
-          <div class="col col-md-3 text-break"><p><%= prop.schema.propertyName.ja  %></p></div>
-          <div class="col col-md-2"><p><input id="prop-value-<%= prop.name %>" type="text" value="<%= propertyViewModels[prop.name].valueText %>" style="width:100%"></p></div>
+          <div class="col col-md-2 text-break"><p><%= prop.schema.propertyName.ja  %></p></div>
+          <div class="col col-md-1"><p><input id="prop-value-<%= prop.name %>" type="text" value="<%= propertyViewModels[prop.name].valueText %>" style="width:100%"></p></div>
           <div class="col col-md-2 text-break"><p id="prop-updated-<%= prop.name %>"><%= device.propertiesValue[prop.name].updated %></p></div>
+          <div class="col col-md-2 text-break"><p id="prop-sync-<%= prop.name %>">-</p></div>
           <div class="col col-md-2 text-break">
             <p>
               <% if(prop.readable){ %>
@@ -207,18 +209,54 @@
             url: "<%= root %>/elapi/v1/devices/<%= device.name %>",
             dataType : "json"
           }).done((data)=>{
-  
+
             for(let propName in data.values)
             {
               const propValue = data.values[propName];
 
-              const valueText = typeof(propValue.value) === "object" ? 
-                JSON.stringify(propValue.value) : 
+              const valueText = typeof(propValue.value) === "object" ?
+                JSON.stringify(propValue.value) :
                 propValue.value !== undefined ? propValue.value.toString() : "";
 
               $(`#prop-value-${propName}`).val(valueText);
               $(`#prop-updated-${propName}`).text(utcTextToLocalText(propValue.updated));
             }
+        });
+      }
+
+      function updatePropertySyncStatus()
+      {
+        $.ajax({
+            type: "GET",
+            url: "<%= root %>/api/propertysync",
+            dataType : "json"
+          }).done((data)=>{
+            // PropertySyncが無効な場合
+            if(data.error)
+            {
+              // すべてのsyncセルに"N/A"を表示
+              $('[id^="prop-sync-"]').text('N/A');
+              return;
+            }
+
+            const deviceKey = "<%= device.ip %>:<%= device.eoj %>";
+            const deviceSyncData = data[deviceKey];
+
+            if(deviceSyncData)
+            {
+              for(let propName in deviceSyncData)
+              {
+                const syncInfo = deviceSyncData[propName];
+                const effectiveInterval = syncInfo.intervalSec * syncInfo.backoffMultiplier;
+                const text = syncInfo.backoffMultiplier > 1
+                  ? `${effectiveInterval}s(${syncInfo.backoffMultiplier}x) / ${syncInfo.timeoutCount}`
+                  : `${syncInfo.intervalSec}s / ${syncInfo.timeoutCount}`;
+                $(`#prop-sync-${propName}`).text(text);
+              }
+            }
+        }).fail(()=>{
+          // APIエラーの場合もN/Aを表示
+          $('[id^="prop-sync-"]').text('N/A');
         });
       }
       
@@ -228,8 +266,8 @@
         $(`#prop-updated-${propDate.name}`).text(utcTextToLocalText(propDate.updated));
       }
 
-
-      
+      // 初回同期状態取得
+      updatePropertySyncStatus();
 
       // WebSocketによるサーバー側Pushイベントの受信
       let reconnectAttempts = 0;
@@ -258,10 +296,12 @@
             if(id === "<%= device.id %>")
             {
               updateProperties();
+              updatePropertySyncStatus();
             }
             else if(id === "<%= device.name %>")
             {
               updateProperties();
+              updatePropertySyncStatus();
             }
 
           }

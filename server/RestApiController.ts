@@ -94,7 +94,8 @@ export class RestApiController
     app.get("/api/status", this.getStatus);
     app.get("/api/events", this.getEventsWithLongPolling);  // OBSOLETE
     app.get("/api/logs", this.getLogs);
-    
+    app.get("/api/propertysync", this.getPropertySyncStatus);
+
     app.get("/downloadlogs/zip", this.downloadLogs);
 
     app.get("/openapi.json", this.getOpenApiJson);
@@ -795,5 +796,19 @@ export class RestApiController
     var converter = new RestApiOpenApiConverter();
     const jsonObj = converter.createOpenApiJson(this.deviceStore, this.root);
     return jsonObj;
+  }
+
+  private getPropertySyncStatus = (
+    req: express.Request,
+    res: express.Response
+  ): void => {
+    const propertySyncManager = this.echoNetLiteController.getRawController().getPropertySyncManager();
+    if (!propertySyncManager) {
+      res.json({ error: "PropertySync not enabled" });
+      return;
+    }
+
+    const syncStatus = propertySyncManager.getSyncStatus();
+    res.json(syncStatus);
   }
 }

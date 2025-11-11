@@ -484,4 +484,9 @@ export class EchoNetLiteController{
       deduplication: this.echonetLiteRawController.getDeduplicationStatus(),
     }
   }
+
+  public getRawController = ():EchoNetLiteRawController=>
+  {
+    return this.echonetLiteRawController;
+  }
 }
