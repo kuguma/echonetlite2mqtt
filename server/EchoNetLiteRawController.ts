@@ -12,7 +12,7 @@ export class EchoNetLiteRawController {
   private readonly nodes: RawNode[] = [];
   private readonly infQueue: Response[] = [];
   private readonly sendQueue: CommandWithCallback[] = [];
-  private readonly requestQueue: Command[] = [];
+  private readonly requestQueue: Command[] = []; // 未使用
   private processing = false;
 
 
@@ -478,37 +478,38 @@ export class EchoNetLiteRawController {
       }
 
       // Requestキューは優先度低め。他に処理が来たときは中断してそちらを優先する
-      while (this.requestQueue.length > 0) {
-        if(this.infQueue.length > 0 || this.sendQueue.length > 0)
-        {
-          break;
-        }
-        const command = this.requestQueue.shift();
-        if(command === undefined)
-        {
-          throw Error("ありえない");
-        }
+      // Requestキューは現在の実装では使われていない模様
+      // while (this.requestQueue.length > 0) {
+      //   if(this.infQueue.length > 0 || this.sendQueue.length > 0)
+      //   {
+      //     break;
+      //   }
+      //   const command = this.requestQueue.shift();
+      //   if(command === undefined)
+      //   {
+      //     throw Error("ありえない");
+      //   }
         
-        const newValue = await EchoNetLiteRawController.getProperty(command.ip, command.deoj, command.epc);
-        if (newValue === undefined) {
-          continue;
-        }
-        const matchProperty = this.findProperty(command.ip, command.deoj, command.epc);
-        if (matchProperty === undefined) {
-          throw Error("ありえない");
-        }
+      //   const newValue = await EchoNetLiteRawController.getProperty(command.ip, command.deoj, command.epc);
+      //   if (newValue === undefined) {
+      //     continue;
+      //   }
+      //   const matchProperty = this.findProperty(command.ip, command.deoj, command.epc);
+      //   if (matchProperty === undefined) {
+      //     throw Error("ありえない");
+      //   }
 
-        const oldValue = matchProperty.value;
-        matchProperty.value = newValue;
+      //   const oldValue = matchProperty.value;
+      //   matchProperty.value = newValue;
 
-        // イベントを発火する
-        this.firePropertyChanged(
-          matchProperty.ip, 
-          matchProperty.eoj, 
-          matchProperty.epc, 
-          oldValue, 
-          matchProperty.value);
-      }
+      //   // イベントを発火する
+      //   this.firePropertyChanged(
+      //     matchProperty.ip, 
+      //     matchProperty.eoj, 
+      //     matchProperty.epc, 
+      //     oldValue, 
+      //     matchProperty.value);
+      // }
     }
     finally {
       this.processing = false;
