@@ -781,11 +781,13 @@ export class EchoNetLiteRawController {
       Logger.debug("[ECHONETLite][queue]", `${ip}: Finished processing in ${elapsed}ms (remaining: inf=${queue.infQueue.length}, send=${remainingSendCount})`);
     }
 
+    // 処理完了: 必ずprocessingフラグをリセット
+    queue.processing = false;
+
     const totalSendCount = queue.prioritySendQueue.length + queue.normalSendQueue.length + queue.backgroundSendQueue.length;
     if (queue.infQueue.length > 0 || totalSendCount > 0) {
       // キューにまだアイテムがあればすぐに次の処理をスケジュール
       Logger.debug("[ECHONETLite][queue]", `${ip}: More items in queue (inf=${queue.infQueue.length}, send=${totalSendCount}), scheduling next processing`);
-      queue.processing = false;
       setTimeout(() => this.processQueueForIp(ip), 1);
     }
   }
