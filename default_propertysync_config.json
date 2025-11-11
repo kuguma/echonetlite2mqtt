@@ -1,14 +1,19 @@
 {
   "syncRules": [
-    {
-      "deviceClass": "*",
-      "properties": ["operationStatus"],
-      "intervalSec": 20
-    },
-    {
-      "deviceClass": "*",
-      "properties": ["*"],
-      "intervalSec": 240
-    }
+    { "deviceClass": "*", "properties": ["operationStatus"], "intervalSec": 5 },
+    { "deviceClass": "*", "properties": ["consumedCumulativeElectricEnergy"], "intervalSec": 600 },
+    { "deviceClass": "*", "properties": ["faultStatus", "faultDescription"], "intervalSec": 3600 },
+
+    { "deviceClass": "homeAirConditioner", "properties": ["operationMode", "targetTemperature", "airFlowLevel", "automaticSwingAirFlow", "powerSavingOperation", "relativeHumidityDehumidifying"], "intervalSec": 5 },
+    { "deviceClass": "homeAirConditioner", "properties": ["roomTemperature", "humidity", "outdoorTemperature", "instantaneousElectricPowerConsumption", "consumedCumulativeElectricEnergy"], "intervalSec": 30 },
+
+    { "deviceClass": "floorHeater", "properties": ["onTimerReservation", "timeOfOnTimer", "offTimerReservation", "timeOfOffTimer", "dailyTimer", "targetTemperature", "targetTemperature2"], "intervalSec": 5 },
+    { "deviceClass": "floorHeater", "properties": ["measuredRoomTemperature"], "intervalSec": 30 },
+
+    { "deviceClass": "pvPowerGeneration", "properties": ["*"], "intervalSec": 300 },
+    { "deviceClass": "storageBattery", "properties": ["*"], "intervalSec": 300 },
+    { "deviceClass": "powerDistributionBoardMetering", "properties": ["*"], "intervalSec": 300 },
+
+    { "deviceClass": "*", "properties": ["*"], "intervalSec": 86400 }
   ]
 }
