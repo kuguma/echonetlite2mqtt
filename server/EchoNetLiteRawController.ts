@@ -522,12 +522,15 @@ export class EchoNetLiteRawController {
       }))
     };
 
-    // デバイス間は並列処理（デバイス内は直列でデバイス保護）
-    await Promise.allSettled(
-      result.devices.map(device => 
-        EchoNetLiteRawController.collectDeviceDetails(device, result.ip)
-      )
-    );
+    // IPごとに直列処理（おそらく物理的には一つのIPに対して1コントローラだと思われるので）
+    for (const device of result.devices) {
+      try {
+        await EchoNetLiteRawController.collectDeviceDetails(device, result.ip);
+      } catch (e) {
+        Logger.warn("[ECHONETLite][raw]", `Failed to collect details for device ${device.eoj} on ${result.ip}`, {exception: e});
+        // 1つのデバイスが失敗しても他のデバイスの収集は続行
+      }
+    }
 
     return result;
   }
