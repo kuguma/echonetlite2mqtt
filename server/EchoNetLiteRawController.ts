@@ -654,34 +654,47 @@ export class EchoNetLiteRawController {
       { queue: queue.backgroundSendQueue, name: 'background' }
     ];
 
-    for (const { queue: targetQueue, name } of queues) {
-      while (targetQueue.length > 0) {
-        const command = targetQueue.shift();
-        if (command === undefined) {
-          throw Error("ありえない");
-        }
-        sendProcessed++;
-        Logger.debug("[ECHONETLite][queue]", `${ip}: Sending command (${name}) ${command.seoj}->${command.deoj} ESV=${command.esv} EPC=${command.epc}`);
+    while (queue.prioritySendQueue.length > 0 || queue.normalSendQueue.length > 0 || queue.backgroundSendQueue.length > 0) {
+      let command: CommandWithCallback | undefined;
+      let queueName: string = 'no_set'
 
-        // コマンド送信
-        const res = await this.sendCommand(command);
+      // 優先度順に1つのコマンドを取得
+      if (queue.prioritySendQueue.length > 0) {
+        command = queue.prioritySendQueue.shift();
+        queueName = 'priority';
+      } else if (queue.normalSendQueue.length > 0) {
+        command = queue.normalSendQueue.shift();
+        queueName = 'normal';
+      } else if (queue.backgroundSendQueue.length > 0) {
+        command = queue.backgroundSendQueue.shift();
+        queueName = 'background';
+      }
 
-        // GET_RESの場合は値を更新
-        if (res !== undefined) {
-          this.updatePropertiesFromResponse(res);
-        }
+      if (command === undefined) {
+        throw Error("ありえない");
+      }
 
-        // 成功/失敗ハンドラを実行
-        if (res !== undefined && command.onSuccess) {
-          command.onSuccess();
-        } else if (res === undefined && command.onFailure) {
-          command.onFailure();
-        }
+      sendProcessed++;
+      Logger.debug("[ECHONETLite][queue]", `${ip}: Sending command (${queueName}) ${command.seoj}->${command.deoj} ESV=${command.esv} EPC=${command.epc}`);
 
-        // コールバック実行
-        if(command.callback !== undefined) {
-          command.callback(res !== undefined ? res : new CommandResponse(command));
-        }
+      // コマンド送信
+      const res = await this.sendCommand(command);
+
+      // GET_RESの場合は値を更新
+      if (res !== undefined) {
+        this.updatePropertiesFromResponse(res);
+      }
+
+      // 成功/失敗ハンドラを実行
+      if (res !== undefined && command.onSuccess) {
+        command.onSuccess();
+      } else if (res === undefined && command.onFailure) {
+        command.onFailure();
+      }
+
+      // コールバック実行
+      if(command.callback !== undefined) {
+        command.callback(res !== undefined ? res : new CommandResponse(command));
       }
     }
 
