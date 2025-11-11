@@ -5,15 +5,22 @@
     { "deviceClass": "*", "properties": ["faultStatus", "faultDescription"], "intervalSec": 3600 },
 
     { "deviceClass": "homeAirConditioner", "properties": ["operationMode", "targetTemperature", "airFlowLevel", "automaticSwingAirFlow", "powerSavingOperation", "relativeHumidityDehumidifying"], "intervalSec": 5 },
-    { "deviceClass": "homeAirConditioner", "properties": ["roomTemperature", "humidity", "outdoorTemperature", "instantaneousElectricPowerConsumption", "consumedCumulativeElectricEnergy"], "intervalSec": 30 },
+    { "deviceClass": "homeAirConditioner", "properties": ["roomTemperature", "humidity", "outdoorTemperature"], "intervalSec": 30 },
+    { "deviceClass": "homeAirConditioner", "properties": ["instantaneousElectricPowerConsumption", "consumedCumulativeElectricEnergy"], "intervalSec": 600 },
+
+    { "deviceClass": "waterHeater", "properties": ["operationMode", "targetWaterTemperature"], "intervalSec": 5 },
+    { "deviceClass": "waterHeater", "properties": ["measuredWaterTemperature"], "intervalSec": 30 },
 
     { "deviceClass": "floorHeater", "properties": ["onTimerReservation", "timeOfOnTimer", "offTimerReservation", "timeOfOffTimer", "dailyTimer", "targetTemperature", "targetTemperature2"], "intervalSec": 5 },
     { "deviceClass": "floorHeater", "properties": ["measuredRoomTemperature"], "intervalSec": 30 },
+
+    { "deviceClass": "waterFlowMeter", "properties": ["cumulativeFlowingWater　"], "intervalSec": 300 },
+    { "deviceClass": "gasMeter", "properties": ["cumulativeGasConsumption"], "intervalSec": 300 },
 
     { "deviceClass": "pvPowerGeneration", "properties": ["*"], "intervalSec": 300 },
     { "deviceClass": "storageBattery", "properties": ["*"], "intervalSec": 300 },
     { "deviceClass": "powerDistributionBoardMetering", "properties": ["*"], "intervalSec": 300 },
 
-    { "deviceClass": "*", "properties": ["*"], "intervalSec": 86400 }
+    { "deviceClass": "*", "properties": ["*"], "intervalSec": 21600 }
   ]
 }
