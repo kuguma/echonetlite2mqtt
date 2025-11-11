@@ -20,6 +20,12 @@ export class EchoNetLiteRawController {
     processing: boolean;
   }> = new Map();
 
+  // 重複排除用のデータ構造
+  // IP別の保留中リクエストキー（GET用）
+  private readonly pendingGets: Map<string, Set<string>> = new Map();
+  // IP別の保留中SETリクエスト（requestKey → {最新値、Promise}）
+  private readonly pendingSets: Map<string, Map<string, {edt: string, promise: Promise<CommandResponse>}>> = new Map();
+
   // IP別キューの取得または作成
   private getOrCreateIpQueue(ip: string) {
     let queue = this.ipQueues.get(ip);
@@ -90,7 +96,124 @@ export class EchoNetLiteRawController {
   //     this.processQueue();
   //   }
   // }
-  
+
+  /**
+   * GETリクエストを発行（重複排除あり）
+   * 同じIP/EOJ/EPCへの同時リクエストは1つに統合される
+   */
+  public requestGet = async (
+    ip: string,
+    seoj: string,
+    deoj: string,
+    epc: string
+  ): Promise<CommandResponse> => {
+    const requestKey = `GET:${deoj}:${epc}`;
+
+    // IP別の保留中GETリクエストセットを取得または作成
+    if (!this.pendingGets.has(ip)) {
+      this.pendingGets.set(ip, new Set());
+    }
+    const pending = this.pendingGets.get(ip)!;
+
+    // 重複チェック
+    if (pending.has(requestKey)) {
+      Logger.debug("[ECHONETLite][dedup]", `Duplicate GET request rejected: ${ip} ${deoj} ${epc}`);
+      throw new Error(`Duplicate GET request: ${ip} ${deoj} ${epc}`);
+    }
+
+    // リクエストを保留中としてマーク
+    pending.add(requestKey);
+    Logger.debug("[ECHONETLite][dedup]", `GET request started: ${ip} ${deoj} ${epc}`);
+
+    try {
+      const result = await this.execPromise({
+        ip,
+        seoj,
+        deoj,
+        esv: ELSV.GET,
+        epc,
+        edt: "",
+        tid: ""
+      });
+      Logger.debug("[ECHONETLite][dedup]", `GET request completed: ${ip} ${deoj} ${epc}`);
+      return result;
+    } finally {
+      // 完了後、保留中マークを削除（クリーンアップ）
+      pending.delete(requestKey);
+      if (pending.size === 0) {
+        this.pendingGets.delete(ip);
+      }
+    }
+  }
+
+  /**
+   * SETリクエストを発行（重複排除あり）
+   * 同じIP/EOJ/EPCへの連続リクエストは最新値のみが実行される
+   */
+  public requestSet = async (
+    ip: string,
+    seoj: string,
+    deoj: string,
+    epc: string,
+    edt: string
+  ): Promise<CommandResponse> => {
+    const requestKey = `SET:${deoj}:${epc}`;
+
+    // IP別の保留中SETリクエストマップを取得または作成
+    if (!this.pendingSets.has(ip)) {
+      this.pendingSets.set(ip, new Map());
+    }
+    const pending = this.pendingSets.get(ip)!;
+
+    // 重複チェック
+    if (pending.has(requestKey)) {
+      // 既に同じSETが保留中 → 最新値で上書き
+      const existingRequest = pending.get(requestKey)!;
+      existingRequest.edt = edt;
+      Logger.debug("[ECHONETLite][dedup]", `SET request updated with new value: ${ip} ${deoj} ${epc} = ${edt}`);
+      return existingRequest.promise;
+    }
+
+    // 新規SETリクエスト
+    Logger.debug("[ECHONETLite][dedup]", `SET request started: ${ip} ${deoj} ${epc} = ${edt}`);
+
+    // 実行用のデータ構造を作成
+    const request = {
+      edt,
+      promise: null as unknown as Promise<CommandResponse>
+    };
+
+    // Promiseを作成して保存
+    request.promise = (async () => {
+      try {
+        // 実行直前の最新値を取得（他のリクエストで上書きされている可能性がある）
+        const latestEdt = request.edt;
+        Logger.debug("[ECHONETLite][dedup]", `SET request executing: ${ip} ${deoj} ${epc} = ${latestEdt}`);
+
+        const result = await this.execPromise({
+          ip,
+          seoj,
+          deoj,
+          esv: ELSV.SETC,
+          epc,
+          edt: latestEdt,
+          tid: ""
+        });
+        Logger.debug("[ECHONETLite][dedup]", `SET request completed: ${ip} ${deoj} ${epc}`);
+        return result;
+      } finally {
+        // 完了後、保留中マークを削除（クリーンアップ）
+        pending.delete(requestKey);
+        if (pending.size === 0) {
+          this.pendingSets.delete(ip);
+        }
+      }
+    })();
+
+    pending.set(requestKey, request);
+    return request.promise;
+  }
+
   public execPromise = (command:Command):Promise<CommandResponse> =>
   {
     return new Promise<CommandResponse>((resolve, reject)=>{
@@ -775,6 +898,26 @@ export class EchoNetLiteRawController {
     return {
       elData:EchoNetCommunicator.getFacilities(),
       nodes:this.nodes
+    };
+  }
+
+  public getDeduplicationStatus = ():unknown =>
+  {
+    let totalPendingGets = 0;
+    let totalPendingSets = 0;
+
+    for (const pending of this.pendingGets.values()) {
+      totalPendingGets += pending.size;
+    }
+
+    for (const pending of this.pendingSets.values()) {
+      totalPendingSets += pending.size;
+    }
+
+    return {
+      pendingGetRequests: totalPendingGets,
+      pendingSetRequests: totalPendingSets,
+      ipCount: Math.max(this.pendingGets.size, this.pendingSets.size)
     };
   }
 

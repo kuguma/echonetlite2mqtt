@@ -4,10 +4,8 @@ import EchoNetDeviceConverter from "./EchoNetDeviceConverter";
 import { EchoNetLiteRawController } from "./EchoNetLiteRawController";
 import { EchoNetHoldController } from "./EchoNetHoldController";
 import { HoldOption } from "./MqttController";
-import { ELSV } from "./EchoNetCommunicator";
+import { ELSV, CommandResponse } from "./EchoNetCommunicator";
 import { Logger } from "./Logger";
-
-import { PropertyRequestQueue } from "./PropertyRequestQueue";
 
 export type findDeviceCallback = (internalId:string)=>Device|undefined;
 
@@ -24,7 +22,6 @@ export class EchoNetLiteController{
   private readonly searchDevices:boolean;
   private readonly commandTimeout:number;
   private readonly findDeviceCallback:findDeviceCallback;
-  private readonly propertyRequestQueue:PropertyRequestQueue;
   private readonly propertyRequestRetryCount:number;
   private readonly propertyRequestRetryDelay:number;
   constructor(usedIpByEchoNet:string,
@@ -40,7 +37,6 @@ export class EchoNetLiteController{
     this.aliasOption = aliasOption;
     this.deviceConverter = new EchoNetDeviceConverter(this.aliasOption, unknownAsError);
     this.echonetLiteRawController = new EchoNetLiteRawController();
-    this.propertyRequestQueue = new PropertyRequestQueue(this.requestDevicePropertyInternal.bind(this));
     this.holdController = new EchoNetHoldController({request:this.requestDeviceProperty, set:this.setDevicePropertyPrivate, isBusy:()=>this.echonetLiteRawController.getSendQueueLength() >= 1});
     this.unknownAsError = unknownAsError;
     this.knownDeviceIpList = knownDeviceIpList;
@@ -317,16 +313,22 @@ export class EchoNetLiteController{
     {
       epc = epc.replace(/^0x/gi, "");
     }
+
+    // SET操作（重複排除あり）
     {
-      const res = await this.echonetLiteRawController.execPromise({
-        ip:id.ip, 
-        seoj:"05ff01", 
-        deoj:id.eoj, 
-        esv: ELSV.SETC, 
-        epc, 
-        edt:echoNetData,
-        tid:""});
-      
+      let res: CommandResponse;
+      try {
+        res = await this.echonetLiteRawController.requestSet(id.ip, "05ff01", id.eoj, epc, echoNetData);
+      } catch (e) {
+        // 重複SETの場合は最新値で上書きされるので続行
+        if (String(e).includes("Duplicate")) {
+          Logger.debug("[ECHONETLite]", `setDeviceProperty: duplicate request, value will be updated for ${id.ip} ${id.eoj} ${epc}`);
+        } else {
+          throw e;
+        }
+        return;
+      }
+
       const response = res.matchResponse(_=>_.els.ESV === ELSV.SET_RES);
       if(response === undefined)
       {
@@ -334,31 +336,40 @@ export class EchoNetLiteController{
         return;
       }
     }
+
+    // GET操作で値を確認（重複排除あり）
     {
-      let res = await this.echonetLiteRawController.execPromise({
-        ip:id.ip, 
-        seoj:"05ff01", 
-        deoj:id.eoj, 
-        esv: ELSV.GET, 
-        epc, 
-        edt:"",
-        tid:""});
-      let response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && (epc in _.els.DETAILs));
+      let res: CommandResponse;
+      let response;
+
+      // 1回目のGET
+      try {
+        res = await this.echonetLiteRawController.requestGet(id.ip, "05ff01", id.eoj, epc);
+        response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && (epc in _.els.DETAILs));
+      } catch (e) {
+        if (String(e).includes("Duplicate")) {
+          Logger.debug("[ECHONETLite]", `setDeviceProperty: duplicate GET skipped for ${id.ip} ${id.eoj} ${epc}`);
+          return;
+        }
+        throw e;
+      }
+
       if(response === undefined)
       {
         // リトライする
         Logger.warn("[ECHONETLite]", `setDeviceProperty: retry get property value. epc=${epc}`, {responses:res.responses, command:res.command});
-        res = await this.echonetLiteRawController.execPromise({
-          ip:id.ip, 
-          seoj:"05ff01", 
-          deoj:id.eoj, 
-          esv: ELSV.GET, 
-          epc, 
-          edt:"",
-          tid:""});
-
+        try {
+          res = await this.echonetLiteRawController.requestGet(id.ip, "05ff01", id.eoj, epc);
           response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && (epc in _.els.DETAILs));
+        } catch (e) {
+          if (String(e).includes("Duplicate")) {
+            Logger.debug("[ECHONETLite]", `setDeviceProperty: duplicate GET retry skipped for ${id.ip} ${id.eoj} ${epc}`);
+            return;
+          }
+          throw e;
+        }
       }
+
       if(response === undefined)
       {
         Logger.warn("[ECHONETLite]", `setDeviceProperty: cannot get value after set. epc=${epc}`, {responses:res.responses, command:res.command});
@@ -374,7 +385,6 @@ export class EchoNetLiteController{
         this.firePropertyChangedEvent(id.ip, id.eoj, property.name, value);
         this.holdController.receivedProperty(id, property.name, value);
       }
-
     }
   }
 
@@ -409,23 +419,15 @@ export class EchoNetLiteController{
       Logger.info("[ECHONETLite]", `done searching devices`);
     }
 
-    // プロパティリクエストキューを開始
-    this.propertyRequestQueue.start();
+    // プロパティリクエストはrequestGet/requestSetで直接処理される（重複排除機能付き）
   }
 
   requestDeviceProperty = async (id:DeviceId, propertyName:string):Promise<void> =>
   {
-    // リクエストをキューに追加（非ブロッキング）
-    this.propertyRequestQueue.enqueue(id, propertyName);
-  }
-
-  // 実際のプロパティリクエスト実行用の内部メソッド（キューから呼ばれる）
-  private requestDevicePropertyInternal = async (id:DeviceId, propertyName:string):Promise<void> =>
-  {
     const property = this.deviceConverter.getProperty(id.ip, id.eoj, propertyName);
     if(property === undefined)
     {
-      Logger.warn("[ECHONETLite]", `setDeviceProperty property === undefined propertyName=${propertyName}`);
+      Logger.warn("[ECHONETLite]", `requestDeviceProperty property === undefined propertyName=${propertyName}`);
       return;
     }
 
@@ -438,17 +440,21 @@ export class EchoNetLiteController{
     // リトライロジック
     for(let attempt = 0; attempt <= this.propertyRequestRetryCount; attempt++)
     {
-      const res = await this.echonetLiteRawController.execPromise({
-        ip:id.ip, 
-        seoj:"05ff01", 
-        deoj:id.eoj, 
-        esv: ELSV.GET, 
-        epc, 
-        edt:"",
-        tid:""});
-      
+      let res: CommandResponse;
+      try {
+        // 新しい重複排除付きrequestGetを使用
+        res = await this.echonetLiteRawController.requestGet(id.ip, "05ff01", id.eoj, epc);
+      } catch (e) {
+        // 重複リクエストの場合はスキップ
+        if (String(e).includes("Duplicate")) {
+          Logger.debug("[ECHONETLite]", `requestDeviceProperty: duplicate request skipped for ${id.ip} ${id.eoj} ${epc}`);
+          return;
+        }
+        throw e;
+      }
+
       const response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && (epc in _.els.DETAILs));
-      
+
       if(response !== undefined)
       {
         // 成功: プロパティ値を取得できた
@@ -465,7 +471,7 @@ export class EchoNetLiteController{
       if(attempt < this.propertyRequestRetryCount)
       {
         Logger.debug("[ECHONETLite]", `requestDeviceProperty: retry get property value (attempt ${attempt + 1}/${this.propertyRequestRetryCount}). epc=${epc}`, {responses:res.responses, command:res.command});
-        
+
         // リトライ間隔が設定されている場合は待機
         if(this.propertyRequestRetryDelay > 0)
         {
@@ -490,7 +496,7 @@ export class EchoNetLiteController{
     return {
       hold: this.holdController.getInternalStatus(),
       rawController: this.echonetLiteRawController.getInternalStatus(),
-      propertyRequestQueue: this.propertyRequestQueue.getStatus(),
+      deduplication: this.echonetLiteRawController.getDeduplicationStatus(),
     }
   }
 }
