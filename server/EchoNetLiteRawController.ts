@@ -718,7 +718,7 @@ export class EchoNetLiteRawController {
   }
 
 
-  public initilize = async (objList:string[], echonetTargetNetwork:string, commandTimeout:number):Promise<void> =>
+  public initialize = async (objList:string[], echonetTargetNetwork:string, commandTimeout:number):Promise<void> =>
   {
     await EchoNetCommunicator.initialize(objList, 4, { v4: echonetTargetNetwork, autoGetProperties: false },
       commandTimeout);

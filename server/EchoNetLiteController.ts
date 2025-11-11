@@ -390,7 +390,7 @@ export class EchoNetLiteController{
 
   start = async ():Promise<void>=>
   {
-    await this.echonetLiteRawController.initilize(
+    await this.echonetLiteRawController.initialize(
       Object.keys(this.controllerDeviceDefine),
       this.usedIpByEchoNet,
       this.commandTimeout
