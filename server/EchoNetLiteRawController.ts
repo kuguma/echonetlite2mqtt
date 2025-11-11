@@ -139,15 +139,6 @@ export class EchoNetLiteRawController {
     return this.nodes;
   }
 
-  // 未使用
-  // public exec = (command:Command, callback:(res:CommandResponse)=>void):void =>
-  // {
-  //   this.sendQueue.push({callback: callback, ...command});
-  //   if (this.processing === false) {
-  //     this.processQueue();
-  //   }
-  // }
-
   /**
    * GETリクエストを発行（重複排除あり）
    * 同じIP/EOJ/EPCへの同時リクエストは1つに統合される
@@ -321,14 +312,6 @@ export class EchoNetLiteRawController {
       }
     });
   }
-
-  // 未使用
-  // public enqueue = (command: Command): void  =>{
-  //   this.sendQueue.push({callback: undefined, ...command});
-  //   if (this.processing === false) {
-  //     this.processQueue();
-  //   }
-  // }
 
   private static convertToInstanceList(data: string): string[] {
     const result: string[] = [];
