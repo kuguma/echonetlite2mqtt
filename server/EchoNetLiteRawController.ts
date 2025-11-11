@@ -10,23 +10,44 @@ export interface CommandWithCallback extends Command
 
 export class EchoNetLiteRawController {
   private readonly nodes: RawNode[] = [];
-  private readonly infQueue: Response[] = [];
-  private readonly sendQueue: CommandWithCallback[] = [];
-  private readonly requestQueue: Command[] = []; // 未使用
-  private processing = false;
+  
+  // IP別のキュー構造
+  private readonly ipQueues: Map<string, {
+    infQueue: Response[];
+    sendQueue: CommandWithCallback[];
+    requestQueue: Command[];
+    processing: boolean;
+  }> = new Map();
 
+  // IP別キューの取得または作成
+  private getOrCreateIpQueue(ip: string) {
+    let queue = this.ipQueues.get(ip);
+    if (!queue) {
+      queue = {
+        infQueue: [],
+        sendQueue: [],
+        requestQueue: [],
+        processing: false
+      };
+      this.ipQueues.set(ip, queue);
+    }
+    return queue;
+  }
 
   constructor() {
     
     EchoNetCommunicator.addReveivedHandler((rinfo, els) => {
       if (els.ESV === ELSV.INF) {
-        this.infQueue.push({
+        const ip = rinfo.address;
+        const queue = this.getOrCreateIpQueue(ip);
+        queue.infQueue.push({
           rinfo: rinfo,
           els: els
         });
-        if (this.processing === false) {
+        Logger.debug("[ECHONETLite][queue]", `INF queued for ${ip}, infQueue=${queue.infQueue.length}, sendQueue=${queue.sendQueue.length}`);
+        if (queue.processing === false) {
           // INFの処理
-          this.processQueue();
+          this.processQueueForIp(ip);
         }
       }
       this.fireReceived(rinfo, els);
@@ -50,11 +71,14 @@ export class EchoNetLiteRawController {
   public execPromise = (command:Command):Promise<CommandResponse> =>
   {
     return new Promise<CommandResponse>((resolve, reject)=>{
-      this.sendQueue.push({callback: (res)=>{
+      const ip = command.ip;
+      const queue = this.getOrCreateIpQueue(ip);
+      queue.sendQueue.push({callback: (res)=>{
         resolve(res);
       }, ...command});
-      if (this.processing === false) {
-        this.processQueue();
+      Logger.debug("[ECHONETLite][queue]", `Command queued for ${ip}, infQueue=${queue.infQueue.length}, sendQueue=${queue.sendQueue.length}`);
+      if (queue.processing === false) {
+        this.processQueueForIp(ip);
       }
     });
   }
@@ -291,23 +315,35 @@ export class EchoNetLiteRawController {
 
 
 
-  private processQueue = async ():Promise<void> =>{
-    if (this.processing) {
+  private processQueueForIp = async (ip: string):Promise<void> =>{
+    const queue = this.getOrCreateIpQueue(ip);
+    
+    if (queue.processing) {
+      Logger.debug("[ECHONETLite][queue]", `${ip}: Already processing, skipped`);
       return;
     }
-    this.processing = true;
+    queue.processing = true;
+    
+    const startTime = Date.now();
+    const initialInfCount = queue.infQueue.length;
+    const initialSendCount = queue.sendQueue.length;
+    Logger.debug("[ECHONETLite][queue]", `${ip}: Start processing (inf=${initialInfCount}, send=${initialSendCount})`);
+    
     try {
       // infから先に処理する
-      while (this.infQueue.length > 0) {
-        const inf = this.infQueue.shift();
+      let infProcessed = 0;
+      while (queue.infQueue.length > 0) {
+        const inf = queue.infQueue.shift();
         if (inf === undefined) {
           throw Error("ありえない");
         }
+        infProcessed++;
 
         const foundNode = this.nodes.find(_ => _.ip === inf.rinfo.address);
         if (foundNode === undefined) {
           // 新たなノードからの通知で、d5(自ノードインスタンスリスト通知)ならば、新しいノードを追加する
           if ("d5" in inf.els.DETAILs) {
+            Logger.debug("[ECHONETLite][queue]", `${ip}: Processing INF d5 (new node discovery)`);
             const nodeTemp: RawNode = {
               ip: inf.rinfo.address,
               devices: [{
@@ -363,6 +399,7 @@ export class EchoNetLiteRawController {
               continue;
             }
 
+            Logger.debug("[ECHONETLite][queue]", `${ip}: Processing INF d5 (device update)`);
             eojList.forEach(eoj => {
               nodeTemp.devices.push({
                 ip: inf.rinfo.address,
@@ -412,12 +449,19 @@ export class EchoNetLiteRawController {
             foundProperty.value);
         }
       }
+      if(infProcessed > 0) {
+        Logger.debug("[ECHONETLite][queue]", `${ip}: Processed ${infProcessed} INF items`);
+      }
 
-      while (this.sendQueue.length > 0) {
-        const command = this.sendQueue.shift();
+      let sendProcessed = 0;
+      while (queue.sendQueue.length > 0) {
+        const command = queue.sendQueue.shift();
         if (command === undefined) {
           throw Error("ありえない");
         }
+        sendProcessed++;
+        Logger.debug("[ECHONETLite][queue]", `${ip}: Sending command ${command.seoj}->${command.deoj} ESV=${command.esv} EPC=${command.epc}`);
+        
         let res: CommandResponse;
         try
         {
@@ -476,15 +520,18 @@ export class EchoNetLiteRawController {
           command.callback(res);
         }
       }
+      if(sendProcessed > 0) {
+        Logger.debug("[ECHONETLite][queue]", `${ip}: Processed ${sendProcessed} command items`);
+      }
 
       // Requestキューは優先度低め。他に処理が来たときは中断してそちらを優先する
       // Requestキューは現在の実装では使われていない模様
-      // while (this.requestQueue.length > 0) {
-      //   if(this.infQueue.length > 0 || this.sendQueue.length > 0)
+      // while (queue.requestQueue.length > 0) {
+      //   if(queue.infQueue.length > 0 || queue.sendQueue.length > 0)
       //   {
       //     break;
       //   }
-      //   const command = this.requestQueue.shift();
+      //   const command = queue.requestQueue.shift();
       //   if(command === undefined)
       //   {
       //     throw Error("ありえない");
@@ -512,11 +559,14 @@ export class EchoNetLiteRawController {
       // }
     }
     finally {
-      this.processing = false;
+      queue.processing = false;
+      const elapsed = Date.now() - startTime;
+      Logger.debug("[ECHONETLite][queue]", `${ip}: Finished processing in ${elapsed}ms (remaining: inf=${queue.infQueue.length}, send=${queue.sendQueue.length})`);
     }
 
-    if (this.infQueue.length > 0 || this.sendQueue.length > 0 || this.requestQueue.length > 0) {
-      setTimeout(this.processQueue, 1);
+    if (queue.infQueue.length > 0 || queue.sendQueue.length > 0 || queue.requestQueue.length > 0) {
+      Logger.debug("[ECHONETLite][queue]", `${ip}: More items in queue, scheduling next processing`);
+      setTimeout(() => this.processQueueForIp(ip), 1);
     }
   }
 
