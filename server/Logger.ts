@@ -3,14 +3,24 @@ import winston from "winston";
 import path from "path";
 
 const myConsoleFormat = winston.format.printf((info: TransformableInfo) =>{
-  
+  const timestamp = info.timestamp || new Date().toISOString();
+  const timeStr = new Date(timestamp as string).toLocaleString('ja-JP', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).replace(/\//g, '-');
+
   if(info.category!==undefined)
   {
-    return `${info.level.padEnd(5," ")} ${info.category} ${info.message}`;
+    return `${timeStr} ${info.level.padEnd(5," ")} ${info.category} ${info.message}`;
   }
   else
   {
-    return `${info.level.padEnd(5," ")} ${info.message}`;
+    return `${timeStr} ${info.level.padEnd(5," ")} ${info.message}`;
   }
 })
 
@@ -21,6 +31,7 @@ const logger = winston.createLogger({
   level: logLevel,
   transports: [
     new winston.transports.Console({format: winston.format.combine(
+        winston.format.timestamp(),
         myConsoleFormat
       )}),
     new winston.transports.File({
