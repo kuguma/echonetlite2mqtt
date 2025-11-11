@@ -22,6 +22,8 @@ interface PropertyState {
   timeoutCount: number;
   intervalSec: number;
   backoffMultiplier: number;
+  dead: boolean;  // true: 連続失敗によりリクエスト停止中
+  lastDeadRetryAttempt: number;  // 死亡プロパティの最後のリトライ試行時刻
 }
 
 interface UpdateRequest {
@@ -78,6 +80,21 @@ export class PropertySyncManager {
 
         const state = this.getOrCreateState(ip, device.eoj, propName);
         state.intervalSec = rule.intervalSec; // 更新間隔を設定
+
+        // 死亡マークされたプロパティはスキップ（ただし24時間に1回はリトライチャンスを与える）
+        if (state.dead) {
+          const timeSinceLastRetry = now - state.lastDeadRetryAttempt;
+          const RETRY_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24時間
+
+          if (timeSinceLastRetry < RETRY_INTERVAL_MS) {
+            Logger.debug("[PropertySync]", `${deviceKey} ${propName}: Skipped (marked as DEAD, next retry in ${Math.floor((RETRY_INTERVAL_MS - timeSinceLastRetry) / 3600000)}h)`);
+            continue;
+          } else {
+            Logger.info("[PropertySync]", `${deviceKey} ${propName}: Retry attempt for DEAD property (24h elapsed)`);
+            state.lastDeadRetryAttempt = now; // リトライ試行時刻を記録
+          }
+        }
+
         // バックオフ係数を考慮した実効間隔
         const effectiveIntervalSec = rule.intervalSec * state.backoffMultiplier;
         const intervalMs = effectiveIntervalSec * 1000;
@@ -120,11 +137,17 @@ export class PropertySyncManager {
   public markAsUpdated(ip: string, eoj: string, propertyName: string): void {
     const state = this.getOrCreateState(ip, eoj, propertyName);
     const hadBackoff = state.backoffMultiplier > 1;
+    const wasDead = state.dead;
     state.status = 'fresh';
     state.lastUpdated = Date.now();
     state.backoffMultiplier = 1; // 成功時にバックオフをリセット
     state.timeoutCount = 0; // 成功時にタイムアウトカウントをリセット
-    if (hadBackoff) {
+    state.dead = false; // 成功時に死亡マークを解除（復活）
+    state.lastDeadRetryAttempt = 0; // 成功時に死亡リトライ時刻をリセット
+
+    if (wasDead) {
+      Logger.info("[PropertySync]", `${ip}:${eoj} ${propertyName}: REVIVED after successful update`);
+    } else if (hadBackoff) {
       Logger.debug("[PropertySync]", `${ip}:${eoj} ${propertyName}: Marked as fresh (backoff reset)`);
     } else {
       Logger.debug("[PropertySync]", `${ip}:${eoj} ${propertyName}: Marked as fresh`);
@@ -139,7 +162,14 @@ export class PropertySyncManager {
     // バックオフ係数を増加（最大16倍）
     state.backoffMultiplier = Math.min(state.backoffMultiplier * 2, 16);
     state.timeoutCount++;
-    Logger.debug("[PropertySync]", `${ip}:${eoj} ${propertyName}: Failed, backoff increased to ${state.backoffMultiplier}x (timeout count: ${state.timeoutCount})`);
+
+    // タイムアウトが10回以上かつバックオフ最大なら死亡マーク
+    if (state.timeoutCount >= 10 && state.backoffMultiplier >= 16) {
+      state.dead = true;
+      Logger.warn("[PropertySync]", `${ip}:${eoj} ${propertyName}: Marked as DEAD after ${state.timeoutCount} consecutive failures`);
+    } else {
+      Logger.debug("[PropertySync]", `${ip}:${eoj} ${propertyName}: Failed, backoff increased to ${state.backoffMultiplier}x (timeout count: ${state.timeoutCount})`);
+    }
   }
 
   /**
@@ -162,7 +192,9 @@ export class PropertySyncManager {
         lastUpdated: Date.now(),
         timeoutCount: 0,
         intervalSec: 0,
-        backoffMultiplier: 1
+        backoffMultiplier: 1,
+        dead: false,
+        lastDeadRetryAttempt: 0
       });
     }
 
@@ -222,7 +254,9 @@ export class PropertySyncManager {
             intervalSec: state.intervalSec,
             timeoutCount: state.timeoutCount,
             backoffMultiplier: state.backoffMultiplier,
-            lastUpdated: state.lastUpdated
+            lastUpdated: state.lastUpdated,
+            dead: state.dead,
+            lastDeadRetryAttempt: state.lastDeadRetryAttempt
           };
         });
       });
