@@ -131,8 +131,17 @@ export class EchoNetLiteRawController {
 
     // 重複チェック
     if (pending.has(requestKey)) {
-      Logger.debug("[ECHONETLite][dedup]", `Duplicate GET request rejected: ${ip} ${deoj} ${epc}`);
-      throw new Error(`Duplicate GET request: ${ip} ${deoj} ${epc}`);
+      Logger.debug("[ECHONETLite][dedup]", `Duplicate GET request skipped: ${ip} ${deoj} ${epc}`);
+      // 空のレスポンスを返す（既に処理中のリクエストがあるため）
+      return new CommandResponse({
+        ip,
+        seoj,
+        deoj,
+        esv: ELSV.GET,
+        epc,
+        edt: "",
+        tid: ""
+      });
     }
 
     // リクエストを保留中としてマーク

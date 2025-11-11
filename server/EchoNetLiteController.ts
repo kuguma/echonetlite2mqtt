@@ -337,42 +337,38 @@ export class EchoNetLiteController{
       }
     }
 
-    // GET操作で値を確認（重複排除あり）
+    // GET操作で値を確認（重複排除あり、リトライロジック）
     {
-      let res: CommandResponse;
+      let res: CommandResponse | undefined;
       let response;
 
-      // 1回目のGET
-      try {
+      for(let attempt = 0; attempt <= this.propertyRequestRetryCount; attempt++)
+      {
         res = await this.echonetLiteRawController.requestGet(id.ip, "05ff01", id.eoj, epc);
         response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && (epc in _.els.DETAILs));
-      } catch (e) {
-        if (String(e).includes("Duplicate")) {
-          Logger.debug("[ECHONETLite]", `setDeviceProperty: duplicate GET skipped for ${id.ip} ${id.eoj} ${epc}`);
-          return;
-        }
-        throw e;
-      }
 
-      if(response === undefined)
-      {
-        // リトライする
-        Logger.warn("[ECHONETLite]", `setDeviceProperty: retry get property value. epc=${epc}`, {responses:res.responses, command:res.command});
-        try {
-          res = await this.echonetLiteRawController.requestGet(id.ip, "05ff01", id.eoj, epc);
-          response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && (epc in _.els.DETAILs));
-        } catch (e) {
-          if (String(e).includes("Duplicate")) {
-            Logger.debug("[ECHONETLite]", `setDeviceProperty: duplicate GET retry skipped for ${id.ip} ${id.eoj} ${epc}`);
-            return;
+        if(response !== undefined)
+        {
+          // 成功
+          break;
+        }
+
+        // 失敗: まだリトライ可能か確認
+        if(attempt < this.propertyRequestRetryCount)
+        {
+          Logger.warn("[ECHONETLite]", `setDeviceProperty: retry get property value (attempt ${attempt + 1}/${this.propertyRequestRetryCount}). epc=${epc}`, {responses:res.responses, command:res.command});
+
+          // リトライ間隔が設定されている場合は待機
+          if(this.propertyRequestRetryDelay > 0)
+          {
+            await new Promise(resolve => setTimeout(resolve, this.propertyRequestRetryDelay));
           }
-          throw e;
         }
       }
 
-      if(response === undefined)
+      if(response === undefined || res === undefined)
       {
-        Logger.warn("[ECHONETLite]", `setDeviceProperty: cannot get value after set. epc=${epc}`, {responses:res.responses, command:res.command});
+        Logger.warn("[ECHONETLite]", `setDeviceProperty: cannot get value after set. epc=${epc}`, res ? {responses:res.responses, command:res.command} : {});
         return;
       }
 
@@ -440,19 +436,8 @@ export class EchoNetLiteController{
     // リトライロジック
     for(let attempt = 0; attempt <= this.propertyRequestRetryCount; attempt++)
     {
-      let res: CommandResponse;
-      try {
-        // 新しい重複排除付きrequestGetを使用
-        res = await this.echonetLiteRawController.requestGet(id.ip, "05ff01", id.eoj, epc);
-      } catch (e) {
-        // 重複リクエストの場合はスキップ
-        if (String(e).includes("Duplicate")) {
-          Logger.debug("[ECHONETLite]", `requestDeviceProperty: duplicate request skipped for ${id.ip} ${id.eoj} ${epc}`);
-          return;
-        }
-        throw e;
-      }
-
+      // 新しい重複排除付きrequestGetを使用
+      const res = await this.echonetLiteRawController.requestGet(id.ip, "05ff01", id.eoj, epc);
       const response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && (epc in _.els.DETAILs));
 
       if(response !== undefined)
