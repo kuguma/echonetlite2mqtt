@@ -33,6 +33,9 @@ interface UpdateRequest {
 export class PropertySyncManager {
   private config?: SyncConfig;
   private readonly propertyStates: Map<string, Map<string, Map<string, PropertyState>>> = new Map();
+  private timerHandle?: NodeJS.Timeout;
+  private deviceStore?: DeviceStore;
+  private requestGetFn?: (ip: string, seoj: string, deoj: string, epc: string, options?: any) => Promise<any>;
 
   constructor() {
   }
@@ -223,5 +226,87 @@ export class PropertySyncManager {
     });
 
     return result;
+  }
+
+  /**
+   * 同期処理を開始する（タイマーループ）
+   */
+  public startSync(
+    deviceStore: DeviceStore,
+    requestGetFn: (ip: string, seoj: string, deoj: string, epc: string, options?: any) => Promise<any>
+  ): void {
+    this.deviceStore = deviceStore;
+    this.requestGetFn = requestGetFn;
+
+    if (this.timerHandle) {
+      Logger.warn("[PropertySync]", "Sync already started");
+      return;
+    }
+
+    Logger.info("[PropertySync]", "Starting sync timer (1000ms interval)");
+    this.timerHandle = setInterval(() => this.processSyncLoop(), 1000);
+  }
+
+  /**
+   * 同期処理を停止する
+   */
+  public stopSync(): void {
+    if (this.timerHandle) {
+      clearInterval(this.timerHandle);
+      this.timerHandle = undefined;
+      Logger.info("[PropertySync]", "Sync timer stopped");
+    }
+  }
+
+  /**
+   * タイマーループで実行される同期処理
+   */
+  private async processSyncLoop(): Promise<void> {
+    if (!this.config || !this.deviceStore || !this.requestGetFn) {
+      return;
+    }
+
+    // 全デバイスをIPごとにグループ化
+    const devicesByIp = new Map<string, any[]>();
+    for (const device of this.deviceStore.getAll()) {
+      if (!devicesByIp.has(device.ip)) {
+        devicesByIp.set(device.ip, []);
+      }
+      devicesByIp.get(device.ip)!.push(device);
+    }
+
+    // IPごとに更新リクエストを生成して実行
+    for (const [ip, devices] of devicesByIp) {
+      const updateRequests = this.checkAndRequestUpdates(ip, this.deviceStore);
+      
+      if (updateRequests.length > 0) {
+        Logger.debug("[PropertySync]", `${ip}: Processing ${updateRequests.length} property sync requests`);
+
+        for (const req of updateRequests) {
+          Logger.debug("[PropertySync]", `${ip}: Requesting sync for ${req.eoj} ${req.epc} (${req.propertyName})`);
+
+          try {
+            // requestGetをbackground優先度で実行
+            const res = await this.requestGetFn(req.ip, "0ef001", req.eoj, req.epc, {
+              priority: 'background',
+              onSuccess: () => {
+                // 成功時: PropertySyncManagerに成功を通知
+                this.markAsUpdated(req.ip, req.eoj, req.propertyName);
+                Logger.debug("[PropertySync]", `${ip}: Sync success for ${req.eoj} ${req.epc} (${req.propertyName})`);
+              },
+              onFailure: () => {
+                // 失敗時: バックオフを増加
+                this.markAsFailed(req.ip, req.eoj, req.propertyName);
+                Logger.debug("[PropertySync]", `${ip}: Sync failed for ${req.eoj} ${req.epc} (${req.propertyName}), backoff increased`);
+              }
+            });
+          } catch (e) {
+            // 例外時もバックオフを増加
+            this.markAsFailed(req.ip, req.eoj, req.propertyName);
+            Logger.warn("[PropertySync]", `${ip}: Sync exception for ${req.eoj} ${req.epc} (${req.propertyName})`, {exception: e});
+          }
+        }
+      }
+    }
   }
 }

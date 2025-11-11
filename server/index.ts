@@ -845,6 +845,12 @@ echoNetListController.start().then(() => {
     // RawControllerにPropertySyncManagerとDeviceStoreを設定
     echoNetListController.getRawController().setPropertySyncManager(propertySyncManager, deviceStore);
 
+    // PropertySyncManagerのタイマーループを開始
+    propertySyncManager.startSync(
+      deviceStore,
+      (ip, seoj, deoj, epc, options) => echoNetListController.getRawController().requestGet(ip, seoj, deoj, epc, options)
+    );
+
     Logger.info("[PropertySync]", `PropertySync enabled with config: ${echonetPropertySyncConfigFile}`);
   }
   else if(echonetPropertySyncConfigFile !== "")

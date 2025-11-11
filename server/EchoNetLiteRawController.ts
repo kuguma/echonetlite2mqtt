@@ -6,9 +6,16 @@ import { PropertySyncManager } from "./PropertySyncManager";
 import { DeviceStore } from "./DeviceStore";
 
 
+export type QueuePriority = 'priority' | 'normal' | 'background';
+
 export interface CommandWithCallback extends Command
 {
   callback: ((res: CommandResponse) => void) | undefined;
+  priority?: QueuePriority;
+  onSuccess?: () => void;
+  onFailure?: () => void;
+  retryCount?: number;
+  retryDelay?: number;
 }
 
 export class EchoNetLiteRawController {
@@ -20,7 +27,9 @@ export class EchoNetLiteRawController {
   // IP別のキュー構造
   private readonly ipQueues: Map<string, {
     infQueue: Response[];
-    sendQueue: CommandWithCallback[];
+    prioritySendQueue: CommandWithCallback[];  // 最優先（REST/MQTT set用）
+    normalSendQueue: CommandWithCallback[];    // 通常（REST/MQTT get用）
+    backgroundSendQueue: CommandWithCallback[]; // バックグラウンド（sync get用）
     processing: boolean;
   }> = new Map();
 
@@ -40,7 +49,9 @@ export class EchoNetLiteRawController {
     if (!queue) {
       queue = {
         infQueue: [],
-        sendQueue: [],
+        prioritySendQueue: [],
+        normalSendQueue: [],
+        backgroundSendQueue: [],
         processing: false
       };
       this.ipQueues.set(ip, queue);
@@ -112,7 +123,8 @@ export class EchoNetLiteRawController {
           rinfo: rinfo,
           els: els
         });
-        Logger.debug("[ECHONETLite][queue]", `INF queued for ${ip}, infQueue=${queue.infQueue.length}, sendQueue=${queue.sendQueue.length}`);
+        const sendCount = queue.prioritySendQueue.length + queue.normalSendQueue.length + queue.backgroundSendQueue.length;
+        Logger.debug("[ECHONETLite][queue]", `INF queued for ${ip}, infQueue=${queue.infQueue.length}, sendQueue=${sendCount}`);
         if (queue.processing === false) {
           // INFの処理
           this.processQueueForIp(ip);
@@ -144,7 +156,14 @@ export class EchoNetLiteRawController {
     ip: string,
     seoj: string,
     deoj: string,
-    epc: string
+    epc: string,
+    options?: {
+      priority?: QueuePriority;
+      onSuccess?: () => void;
+      onFailure?: () => void;
+      retryCount?: number;
+      retryDelay?: number;
+    }
   ): Promise<CommandResponse> => {
     const requestKey = `GET:${deoj}:${epc}`;
 
@@ -182,7 +201,7 @@ export class EchoNetLiteRawController {
         epc,
         edt: "",
         tid: ""
-      });
+      }, options?.priority || 'normal', options?.onSuccess, options?.onFailure);
       Logger.debug("[ECHONETLite][dedup]", `GET request completed: ${ip} ${deoj} ${epc}`);
       return result;
     } finally {
@@ -203,7 +222,14 @@ export class EchoNetLiteRawController {
     seoj: string,
     deoj: string,
     epc: string,
-    edt: string
+    edt: string,
+    options?: {
+      priority?: QueuePriority;
+      onSuccess?: () => void;
+      onFailure?: () => void;
+      retryCount?: number;
+      retryDelay?: number;
+    }
   ): Promise<CommandResponse> => {
     const requestKey = `SET:${deoj}:${epc}`;
 
@@ -246,7 +272,7 @@ export class EchoNetLiteRawController {
           epc,
           edt: latestEdt,
           tid: ""
-        });
+        }, options?.priority || 'priority', options?.onSuccess, options?.onFailure);  // SETはデフォルトで最優先
         Logger.debug("[ECHONETLite][dedup]", `SET request completed: ${ip} ${deoj} ${epc}`);
         return result;
       } finally {
@@ -262,15 +288,34 @@ export class EchoNetLiteRawController {
     return request.promise;
   }
 
-  public execPromise = (command:Command):Promise<CommandResponse> =>
+  public execPromise = (
+    command:Command,
+    priority: QueuePriority = 'normal',
+    onSuccess?: () => void,
+    onFailure?: () => void
+  ):Promise<CommandResponse> =>
   {
     return new Promise<CommandResponse>((resolve, reject)=>{
       const ip = command.ip;
       const queue = this.getOrCreateIpQueue(ip);
-      queue.sendQueue.push({callback: (res)=>{
-        resolve(res);
-      }, ...command});
-      Logger.debug("[ECHONETLite][queue]", `Command queued for ${ip}, infQueue=${queue.infQueue.length}, sendQueue=${queue.sendQueue.length}`);
+      const commandWithCallback: CommandWithCallback = {
+        callback: (res)=>{ resolve(res); },
+        priority,
+        onSuccess,
+        onFailure,
+        ...command
+      };
+
+      // 優先度に応じてキューに追加
+      if (priority === 'priority') {
+        queue.prioritySendQueue.push(commandWithCallback);
+      } else if (priority === 'background') {
+        queue.backgroundSendQueue.push(commandWithCallback);
+      } else {
+        queue.normalSendQueue.push(commandWithCallback);
+      }
+
+      Logger.debug("[ECHONETLite][queue]", `Command queued for ${ip} (priority=${priority}), infQueue=${queue.infQueue.length}, priority=${queue.prioritySendQueue.length}, normal=${queue.normalSendQueue.length}, background=${queue.backgroundSendQueue.length}`);
       if (queue.processing === false) {
         this.processQueueForIp(ip);
       }
@@ -624,25 +669,42 @@ export class EchoNetLiteRawController {
    */
   private async processSendQueue(ip: string, queue: ReturnType<typeof this.getOrCreateIpQueue>): Promise<number> {
     let sendProcessed = 0;
-    while (queue.sendQueue.length > 0) {
-      const command = queue.sendQueue.shift();
-      if (command === undefined) {
-        throw Error("ありえない");
-      }
-      sendProcessed++;
-      Logger.debug("[ECHONETLite][queue]", `${ip}: Sending command ${command.seoj}->${command.deoj} ESV=${command.esv} EPC=${command.epc}`);
 
-      // コマンド送信
-      const res = await this.sendCommand(command);
+    // 優先度順に処理：priority → normal → background
+    const queues = [
+      { queue: queue.prioritySendQueue, name: 'priority' },
+      { queue: queue.normalSendQueue, name: 'normal' },
+      { queue: queue.backgroundSendQueue, name: 'background' }
+    ];
 
-      // GET_RESの場合は値を更新
-      if (res !== undefined) {
-        this.updatePropertiesFromResponse(res);
-      }
+    for (const { queue: targetQueue, name } of queues) {
+      while (targetQueue.length > 0) {
+        const command = targetQueue.shift();
+        if (command === undefined) {
+          throw Error("ありえない");
+        }
+        sendProcessed++;
+        Logger.debug("[ECHONETLite][queue]", `${ip}: Sending command (${name}) ${command.seoj}->${command.deoj} ESV=${command.esv} EPC=${command.epc}`);
 
-      // コールバック実行
-      if(command.callback !== undefined) {
-        command.callback(res !== undefined ? res : new CommandResponse(command));
+        // コマンド送信
+        const res = await this.sendCommand(command);
+
+        // GET_RESの場合は値を更新
+        if (res !== undefined) {
+          this.updatePropertiesFromResponse(res);
+        }
+
+        // 成功/失敗ハンドラを実行
+        if (res !== undefined && command.onSuccess) {
+          command.onSuccess();
+        } else if (res === undefined && command.onFailure) {
+          command.onFailure();
+        }
+
+        // コールバック実行
+        if(command.callback !== undefined) {
+          command.callback(res !== undefined ? res : new CommandResponse(command));
+        }
       }
     }
 
@@ -704,48 +766,6 @@ export class EchoNetLiteRawController {
     });
   }
 
-  /**
-   * PropertySyncのリクエストを生成してキューに追加（コアループのサブルーチン）
-   */
-  private async processPropertySync(ip: string, queue: ReturnType<typeof this.getOrCreateIpQueue>): Promise<void> {
-    // キューが空でPropertySyncが有効な場合のみ実行
-    if (queue.infQueue.length > 0 || queue.sendQueue.length > 0) {
-      return;
-    }
-    if (!this.propertySyncManager || !this.deviceStore) {
-      return;
-    }
-
-    const updateRequests = this.propertySyncManager.checkAndRequestUpdates(ip, this.deviceStore);
-    if (updateRequests.length === 0) {
-      return;
-    }
-
-    Logger.debug("[ECHONETLite][sync]", `${ip}: Processing ${updateRequests.length} property sync requests`);
-
-    for (const req of updateRequests) {
-      Logger.debug("[ECHONETLite][sync]", `${ip}: Requesting sync for ${req.eoj} ${req.epc} (${req.propertyName})`);
-
-      // requestGet()を使用（重複排除機能あり）し、結果を待つ
-      const res = await this.requestGet(req.ip, "0ef001", req.eoj, req.epc);
-
-      // レスポンスをチェック
-      const response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && (req.epc in _.els.DETAILs));
-
-      if (response !== undefined) {
-        // 成功: プロパティ値を更新（CommandResponse型のresを渡す）
-        this.updatePropertiesFromResponse(res);
-        // PropertySyncManagerに成功を通知
-        this.propertySyncManager.markAsUpdated(req.ip, req.eoj, req.propertyName);
-        Logger.debug("[ECHONETLite][sync]", `${ip}: Sync success for ${req.eoj} ${req.epc} (${req.propertyName})`);
-      } else {
-        // 失敗（タイムアウトまたはエラー応答）: バックオフを増加
-        this.propertySyncManager.markAsFailed(req.ip, req.eoj, req.propertyName);
-        Logger.debug("[ECHONETLite][sync]", `${ip}: Sync failed for ${req.eoj} ${req.epc} (${req.propertyName}), backoff increased`);
-      }
-    }
-  }
-
   // コアループ。デバイスごとに単一のキューを使って処理を直列化する。
   private processQueueForIp = async (ip: string):Promise<void> =>{
     const queue = this.getOrCreateIpQueue(ip);
@@ -758,30 +778,25 @@ export class EchoNetLiteRawController {
 
     const startTime = Date.now();
     const initialInfCount = queue.infQueue.length;
-    const initialSendCount = queue.sendQueue.length;
-    Logger.debug("[ECHONETLite][queue]", `${ip}: Start processing (inf=${initialInfCount}, send=${initialSendCount})`);
+    const initialSendCount = queue.prioritySendQueue.length + queue.normalSendQueue.length + queue.backgroundSendQueue.length;
+    Logger.debug("[ECHONETLite][queue]", `${ip}: Start processing (inf=${initialInfCount}, send=${initialSendCount} [p=${queue.prioritySendQueue.length}, n=${queue.normalSendQueue.length}, b=${queue.backgroundSendQueue.length}])`);
 
     try {
       await this.processInfQueue(ip, queue);
       await this.processSendQueue(ip, queue);
-      await this.processPropertySync(ip, queue);  // PropertySyncは内部でawait requestGet()を実行
     }
     finally {
       const elapsed = Date.now() - startTime;
-      Logger.debug("[ECHONETLite][queue]", `${ip}: Finished processing in ${elapsed}ms (remaining: inf=${queue.infQueue.length}, send=${queue.sendQueue.length})`);
+      const remainingSendCount = queue.prioritySendQueue.length + queue.normalSendQueue.length + queue.backgroundSendQueue.length;
+      Logger.debug("[ECHONETLite][queue]", `${ip}: Finished processing in ${elapsed}ms (remaining: inf=${queue.infQueue.length}, send=${remainingSendCount})`);
     }
 
-    if (queue.infQueue.length > 0 || queue.sendQueue.length > 0) {
+    const totalSendCount = queue.prioritySendQueue.length + queue.normalSendQueue.length + queue.backgroundSendQueue.length;
+    if (queue.infQueue.length > 0 || totalSendCount > 0) {
       // キューにまだアイテムがあればすぐに次の処理をスケジュール
-      Logger.debug("[ECHONETLite][queue]", `${ip}: More items in queue (inf=${queue.infQueue.length}, send=${queue.sendQueue.length}), scheduling next processing`);
+      Logger.debug("[ECHONETLite][queue]", `${ip}: More items in queue (inf=${queue.infQueue.length}, send=${totalSendCount}), scheduling next processing`);
       queue.processing = false;
       setTimeout(() => this.processQueueForIp(ip), 1);
-    }else{
-      // そうでなければ1秒後に再確認
-      Logger.debug("[ECHONETLite][queue]", `${ip}: Queue empty, scheduling recheck in 1000ms`);
-      queue.processing = false;
-      setTimeout(() => this.processQueueForIp(ip), 1000);
-
     }
   }
 
