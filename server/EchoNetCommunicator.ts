@@ -346,12 +346,8 @@ export class EchoNetCommunicator
 
       commandResponse.timeoutHandle = handle;
 
-      // 応答受信時のコールバックを設定（クリーンアップ用）
-      commandResponse.setCallback(()=>{
-        this.commandResponses.delete(command.tid);
-        commandResponse.cancelTimeout();
-        resolve(commandResponse);
-      });
+      // マルチキャスト応答収集のため、setCallbackは呼ばない
+      // タイムアウトまで全応答を蓄積する
 
       this.commandResponses.set(command.tid, commandResponse);
     });
