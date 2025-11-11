@@ -14,8 +14,6 @@ export interface CommandWithCallback extends Command
   priority?: QueuePriority;
   onSuccess?: () => void;
   onFailure?: () => void;
-  retryCount?: number;
-  retryDelay?: number;
 }
 
 export class EchoNetLiteRawController {
@@ -152,8 +150,6 @@ export class EchoNetLiteRawController {
       priority?: QueuePriority;
       onSuccess?: () => void;
       onFailure?: () => void;
-      retryCount?: number;
-      retryDelay?: number;
     }
   ): Promise<CommandResponse> => {
     const requestKey = `GET:${deoj}:${epc}`;
@@ -218,8 +214,6 @@ export class EchoNetLiteRawController {
       priority?: QueuePriority;
       onSuccess?: () => void;
       onFailure?: () => void;
-      retryCount?: number;
-      retryDelay?: number;
     }
   ): Promise<CommandResponse> => {
     const requestKey = `SET:${deoj}:${epc}`;
