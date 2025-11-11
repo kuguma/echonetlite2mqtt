@@ -13,12 +13,11 @@ interface SyncConfig {
   syncRules: SyncRule[];
 }
 
-type PropertyStatus = 'fresh' | 'needsUpdate' | 'updating';
+type PropertyStatus = 'fresh' | 'needsUpdate';
 
 interface PropertyState {
   status: PropertyStatus;
   lastUpdated: number;
-  lastChecked: number;
   timeoutCount: number;
   intervalSec: number;
   backoffMultiplier: number;
@@ -34,10 +33,8 @@ interface UpdateRequest {
 export class PropertySyncManager {
   private config?: SyncConfig;
   private readonly propertyStates: Map<string, Map<string, Map<string, PropertyState>>> = new Map();
-  private readonly commandTimeout: number;
 
-  constructor(commandTimeout: number) {
-    this.commandTimeout = commandTimeout;
+  constructor() {
   }
 
   /**
@@ -81,38 +78,17 @@ export class PropertySyncManager {
         const intervalMs = effectiveIntervalSec * 1000;
         const updatedAt = this.parseUpdatedTimestamp(propValue.updated);
 
-        // ステート判定
-        if (state.status === 'updating') {
-          // 問い合わせ中：タイムアウトチェック
-          if (now - state.lastChecked > this.commandTimeout) {
-            // バックオフ係数を増加（最大16倍）
-            state.backoffMultiplier = Math.min(state.backoffMultiplier * 2, 16);
-            Logger.debug("[PropertySync]", `${deviceKey} ${propName}: Timeout in updating state, reset to needsUpdate (backoff: ${state.backoffMultiplier}x)`);
-            state.status = 'needsUpdate';
-            state.timeoutCount++;
-          } else {
-            continue; // まだ問い合わせ中
-          }
-        }
-
         // 鮮度チェック
         if (now - updatedAt > intervalMs) {
-          if (state.status !== 'needsUpdate') {
-            Logger.debug("[PropertySync]", `${deviceKey} ${propName}: Stale (age=${Math.floor((now - updatedAt) / 1000)}s, threshold=${effectiveIntervalSec}s, backoff=${state.backoffMultiplier}x)`);
-            state.status = 'needsUpdate';
-          }
-        } else {
-          state.status = 'fresh';
-          continue;
-        }
-
-        // 更新要求
-        if (state.status === 'needsUpdate') {
+          // 古い場合、リクエストを生成
           const prop = device.properties.find(p => p.name === propName);
           if (!prop) {
             Logger.warn("[PropertySync]", `${deviceKey} ${propName}: Property not found in device.properties`);
             continue;
           }
+
+          Logger.debug("[PropertySync]", `${deviceKey} ${propName}: Stale (age=${Math.floor((now - updatedAt) / 1000)}s, threshold=${effectiveIntervalSec}s, backoff=${state.backoffMultiplier}x)`);
+          state.status = 'needsUpdate';
 
           requests.push({
             ip: device.ip,
@@ -120,6 +96,8 @@ export class PropertySyncManager {
             epc: prop.epc,
             propertyName: propName
           });
+        } else {
+          state.status = 'fresh';
         }
       }
     }
@@ -132,17 +110,7 @@ export class PropertySyncManager {
   }
 
   /**
-   * プロパティを問い合わせ中状態にマーク
-   */
-  public markAsUpdating(ip: string, eoj: string, propertyName: string): void {
-    const state = this.getOrCreateState(ip, eoj, propertyName);
-    state.status = 'updating';
-    state.lastChecked = Date.now();
-    Logger.debug("[PropertySync]", `${ip}:${eoj} ${propertyName}: Marked as updating`);
-  }
-
-  /**
-   * プロパティを最新状態にマーク（値更新時に呼ばれる）
+   * プロパティを最新状態にマーク（値更新成功時に呼ばれる）
    */
   public markAsUpdated(ip: string, eoj: string, propertyName: string): void {
     const state = this.getOrCreateState(ip, eoj, propertyName);
@@ -155,6 +123,17 @@ export class PropertySyncManager {
     } else {
       Logger.debug("[PropertySync]", `${ip}:${eoj} ${propertyName}: Marked as fresh`);
     }
+  }
+
+  /**
+   * プロパティ取得失敗時の処理（バックオフを増加）
+   */
+  public markAsFailed(ip: string, eoj: string, propertyName: string): void {
+    const state = this.getOrCreateState(ip, eoj, propertyName);
+    // バックオフ係数を増加（最大16倍）
+    state.backoffMultiplier = Math.min(state.backoffMultiplier * 2, 16);
+    state.timeoutCount++;
+    Logger.debug("[PropertySync]", `${ip}:${eoj} ${propertyName}: Failed, backoff increased to ${state.backoffMultiplier}x (timeout count: ${state.timeoutCount})`);
   }
 
   /**
@@ -175,7 +154,6 @@ export class PropertySyncManager {
       eojMap.set(propertyName, {
         status: 'fresh',
         lastUpdated: Date.now(),
-        lastChecked: Date.now(),
         timeoutCount: 0,
         intervalSec: 0,
         backoffMultiplier: 1
@@ -238,8 +216,7 @@ export class PropertySyncManager {
             intervalSec: state.intervalSec,
             timeoutCount: state.timeoutCount,
             backoffMultiplier: state.backoffMultiplier,
-            lastUpdated: state.lastUpdated,
-            lastChecked: state.lastChecked
+            lastUpdated: state.lastUpdated
           };
         });
       });

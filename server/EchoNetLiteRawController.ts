@@ -55,6 +55,16 @@ export class EchoNetLiteRawController {
     this.propertySyncManager = manager;
     this.deviceStore = deviceStore;
     Logger.info("[PropertySync]", "PropertySyncManager registered with RawController");
+
+    // 既に検出済みのデバイスに対してキューループをキックスタート
+    const uniqueIps = [...new Set(this.nodes.map(node => node.ip))];
+    for (const ip of uniqueIps) {
+      const queue = this.getOrCreateIpQueue(ip);
+      if (!queue.processing) {
+        Logger.info("[PropertySync]", `Kickstarting queue loop for existing device ${ip}`);
+        this.processQueueForIp(ip);
+      }
+    }
   }
 
   public getPropertySyncManager(): PropertySyncManager | undefined {
@@ -714,13 +724,25 @@ export class EchoNetLiteRawController {
     Logger.debug("[ECHONETLite][sync]", `${ip}: Processing ${updateRequests.length} property sync requests`);
 
     for (const req of updateRequests) {
-      // 問い合わせ中状態にマーク
-      this.propertySyncManager.markAsUpdating(req.ip, req.eoj, req.propertyName);
+      Logger.debug("[ECHONETLite][sync]", `${ip}: Requesting sync for ${req.eoj} ${req.epc} (${req.propertyName})`);
 
-      // requestGet()を使用（重複排除機能あり、重複時は空のレスポンスを返す）
-      this.requestGet(req.ip, "0ef001", req.eoj, req.epc);
+      // requestGet()を使用（重複排除機能あり）し、結果を待つ
+      const res = await this.requestGet(req.ip, "0ef001", req.eoj, req.epc);
 
-      Logger.debug("[ECHONETLite][sync]", `${ip}: Queued sync request for ${req.eoj} ${req.epc} (${req.propertyName})`);
+      // レスポンスをチェック
+      const response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && (req.epc in _.els.DETAILs));
+
+      if (response !== undefined) {
+        // 成功: プロパティ値を更新（CommandResponse型のresを渡す）
+        this.updatePropertiesFromResponse(res);
+        // PropertySyncManagerに成功を通知
+        this.propertySyncManager.markAsUpdated(req.ip, req.eoj, req.propertyName);
+        Logger.debug("[ECHONETLite][sync]", `${ip}: Sync success for ${req.eoj} ${req.epc} (${req.propertyName})`);
+      } else {
+        // 失敗（タイムアウトまたはエラー応答）: バックオフを増加
+        this.propertySyncManager.markAsFailed(req.ip, req.eoj, req.propertyName);
+        Logger.debug("[ECHONETLite][sync]", `${ip}: Sync failed for ${req.eoj} ${req.epc} (${req.propertyName}), backoff increased`);
+      }
     }
   }
 
@@ -742,18 +764,24 @@ export class EchoNetLiteRawController {
     try {
       await this.processInfQueue(ip, queue);
       await this.processSendQueue(ip, queue);
-      await this.processPropertySync(ip, queue);
+      await this.processPropertySync(ip, queue);  // PropertySyncは内部でawait requestGet()を実行
     }
     finally {
-      queue.processing = false;
       const elapsed = Date.now() - startTime;
       Logger.debug("[ECHONETLite][queue]", `${ip}: Finished processing in ${elapsed}ms (remaining: inf=${queue.infQueue.length}, send=${queue.sendQueue.length})`);
     }
 
-    // キューにまだアイテムがあれば次の処理をスケジュール
     if (queue.infQueue.length > 0 || queue.sendQueue.length > 0) {
+      // キューにまだアイテムがあればすぐに次の処理をスケジュール
       Logger.debug("[ECHONETLite][queue]", `${ip}: More items in queue (inf=${queue.infQueue.length}, send=${queue.sendQueue.length}), scheduling next processing`);
+      queue.processing = false;
       setTimeout(() => this.processQueueForIp(ip), 1);
+    }else{
+      // そうでなければ1秒後に再確認
+      Logger.debug("[ECHONETLite][queue]", `${ip}: Queue empty, scheduling recheck in 1000ms`);
+      queue.processing = false;
+      setTimeout(() => this.processQueueForIp(ip), 1000);
+
     }
   }
 
@@ -910,6 +938,15 @@ export class EchoNetLiteRawController {
   }
   private fireDeviceDetected = (ip:string, eojList:string[]):void=>{
     this.deviceDetectedListeners.forEach(_=>_(ip, eojList));
+
+    // PropertySyncが有効な場合、このIPのキューループをキックスタート
+    if (this.propertySyncManager && this.deviceStore) {
+      const queue = this.getOrCreateIpQueue(ip);
+      if (!queue.processing) {
+        Logger.info("[PropertySync]", `Kickstarting queue loop for ${ip} after device detection`);
+        this.processQueueForIp(ip);
+      }
+    }
   }
 
   readonly propertyChangedHandlers:((ip:string, eoj:string, epc:string, oldValue:string, newValue:string) => void)[] = [];

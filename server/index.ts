@@ -836,7 +836,7 @@ echoNetListController.start().then(() => {
   // PropertySync機能の開始
   if(echonetPropertySyncConfigFile !== "" && fs.existsSync(echonetPropertySyncConfigFile))
   {
-    const propertySyncManager = new PropertySyncManager(echonetCommandTimeout);
+    const propertySyncManager = new PropertySyncManager();
     propertySyncManager.loadConfig(echonetPropertySyncConfigFile);
 
     // DeviceStoreにPropertySyncManagerを設定

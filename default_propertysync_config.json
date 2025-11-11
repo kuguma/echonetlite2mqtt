@@ -3,12 +3,12 @@
     {
       "deviceClass": "*",
       "properties": ["operationStatus"],
-      "intervalSec": 10
+      "intervalSec": 20
     },
     {
       "deviceClass": "*",
       "properties": ["*"],
-      "intervalSec": 120
+      "intervalSec": 240
     }
   ]
 }
