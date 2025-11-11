@@ -26,6 +26,10 @@ export class EchoNetLiteRawController {
   // IP別の保留中SETリクエスト（requestKey → {最新値、Promise}）
   private readonly pendingSets: Map<string, Map<string, {edt: string, promise: Promise<CommandResponse>}>> = new Map();
 
+  // デバイス収集の排他制御（ノードIP別）
+  // 同一ノードに対する並行getNewNode呼び出しを防ぎ、デバイス保護を維持
+  private readonly deviceCollectionLocks: Map<string, Promise<void>> = new Map();
+
   // IP別キューの取得または作成
   private getOrCreateIpQueue(ip: string) {
     let queue = this.ipQueues.get(ip);
@@ -59,6 +63,35 @@ export class EchoNetLiteRawController {
       }
     } finally {
       // 更新完了を通知
+      resolve!();
+    }
+  }
+
+  // デバイス収集の排他制御（ノードIP別）
+  // 同一ノードに対する並行getNewNode呼び出しを防ぎ、デバイスへの並列リクエストを回避
+  private async getNewNodeWithLock(node: RawNode): Promise<RawNode> {
+    const nodeKey = node.ip;
+
+    // 同一IPに対する既存の収集処理が完了するまで待つ
+    const existingLock = this.deviceCollectionLocks.get(nodeKey);
+    if (existingLock !== undefined) {
+      Logger.debug("[ECHONETLite][lock]", `Waiting for existing collection to complete for ${nodeKey}`);
+      await existingLock;
+    }
+
+    // 新しいロックを作成
+    let resolve: () => void;
+    const newLock = new Promise<void>(r => resolve = r!);
+    this.deviceCollectionLocks.set(nodeKey, newLock);
+
+    try {
+      Logger.debug("[ECHONETLite][lock]", `Starting device collection for ${nodeKey}`);
+      const result = await EchoNetLiteRawController.getNewNode(node);
+      Logger.debug("[ECHONETLite][lock]", `Completed device collection for ${nodeKey}`);
+      return result;
+    } finally {
+      // ロックを解除
+      this.deviceCollectionLocks.delete(nodeKey);
       resolve!();
     }
   }
@@ -511,7 +544,8 @@ export class EchoNetLiteRawController {
             });
 
             // ノート応答が遅い場合ここで待たされることになるが、一旦あきらめる
-            const newNode = await EchoNetLiteRawController.getNewNode(nodeTemp);
+            // 排他制御付きでノード詳細を取得
+            const newNode = await this.getNewNodeWithLock(nodeTemp);
             await this.updateOrAddNode(newNode);
             this.fireDeviceDetected(newNode.ip, newNode.devices.map(_=>_.eoj));
           }
@@ -548,7 +582,8 @@ export class EchoNetLiteRawController {
               });
             });
 
-            const newNode = await EchoNetLiteRawController.getNewNode(nodeTemp);
+            // 排他制御付きでノード詳細を取得
+            const newNode = await this.getNewNodeWithLock(nodeTemp);
             await this.updateOrAddNode(newNode);
             this.fireDeviceDetected(newNode.ip, newNode.devices.map(_=>_.eoj));
 
@@ -751,8 +786,8 @@ export class EchoNetLiteRawController {
 
     Logger.debug("[ECHONETLite][discovery]", `Found ${deviceCount} devices on ${ip}, fetching details`);
 
-    // ノードの詳細を取得する
-    const newNode = await EchoNetLiteRawController.getNewNode(node);
+    // ノードの詳細を取得する（排他制御付き）
+    const newNode = await this.getNewNodeWithLock(node);
     await this.updateOrAddNode(newNode);
     this.fireDeviceDetected(newNode.ip, newNode.devices.map(_=>_.eoj));
 
@@ -815,7 +850,8 @@ export class EchoNetLiteRawController {
         const nodeStartTime = Date.now();
         Logger.debug("[ECHONETLite][discovery]", `Starting node detail collection for ${node.ip}`);
 
-        const newNode = await EchoNetLiteRawController.getNewNode(node);
+        // 排他制御付きでノード詳細を取得
+        const newNode = await this.getNewNodeWithLock(node);
 
         const nodeElapsed = Date.now() - nodeStartTime;
         const deviceCount = newNode.devices.length;
