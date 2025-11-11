@@ -67,16 +67,6 @@ export class EchoNetLiteRawController {
     this.propertySyncManager = manager;
     this.deviceStore = deviceStore;
     Logger.info("[PropertySync]", "PropertySyncManager registered with RawController");
-
-    // 既に検出済みのデバイスに対してキューループをキックスタート
-    const uniqueIps = [...new Set(this.nodes.map(node => node.ip))];
-    for (const ip of uniqueIps) {
-      const queue = this.getOrCreateIpQueue(ip);
-      if (!queue.processing) {
-        Logger.info("[PropertySync]", `Kickstarting queue loop for existing device ${ip}`);
-        this.processQueueForIp(ip);
-      }
-    }
   }
 
   public getPropertySyncManager(): PropertySyncManager | undefined {
@@ -955,15 +945,6 @@ export class EchoNetLiteRawController {
   }
   private fireDeviceDetected = (ip:string, eojList:string[]):void=>{
     this.deviceDetectedListeners.forEach(_=>_(ip, eojList));
-
-    // PropertySyncが有効な場合、このIPのキューループをキックスタート
-    if (this.propertySyncManager && this.deviceStore) {
-      const queue = this.getOrCreateIpQueue(ip);
-      if (!queue.processing) {
-        Logger.info("[PropertySync]", `Kickstarting queue loop for ${ip} after device detection`);
-        this.processQueueForIp(ip);
-      }
-    }
   }
 
   readonly propertyChangedHandlers:((ip:string, eoj:string, epc:string, oldValue:string, newValue:string) => void)[] = [];
