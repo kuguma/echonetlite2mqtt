@@ -1,0 +1,14 @@
+{
+  "syncRules": [
+    {
+      "deviceClass": "*",
+      "properties": ["operationStatus"],
+      "intervalSec": 10
+    },
+    {
+      "deviceClass": "*",
+      "properties": ["*"],
+      "intervalSec": 120
+    }
+  ]
+}

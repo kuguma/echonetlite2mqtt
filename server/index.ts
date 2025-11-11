@@ -59,6 +59,7 @@ interface InputParameters{
   echonetDeviceIpList:string;
   echonetDisableAutoDeviceDiscovery:boolean;
   echonetCommandTimeout:number;
+  echonetPropertySyncConfigFile:string;
   debugLog:boolean;
   restApiPort:number;
   restApiHost:string;
@@ -84,6 +85,7 @@ let echonetDisableAutoDeviceDiscovery = false;
 let echonetCommandTimeout = 3000;
 let echonetPropertyRequestRetryCount = 1;
 let echonetPropertyRequestRetryDelay = 0;
+let echonetPropertySyncConfigFile = "";
 let debugLog = false;
 let restApiPort = 3000;
 let restApiHost = "0.0.0.0";
@@ -172,6 +174,13 @@ if( "ECHONET_PROPERTY_REQUEST_RETRY_DELAY" in process.env &&
   {
     echonetPropertyRequestRetryDelay = tempNo;
   }
+}
+
+if (
+  "ECHONET_PROPERTY_SYNC_CONFIG_FILE" in process.env &&
+  process.env.ECHONET_PROPERTY_SYNC_CONFIG_FILE !== undefined
+) {
+  echonetPropertySyncConfigFile = process.env.ECHONET_PROPERTY_SYNC_CONFIG_FILE.replace(/^"/g, "").replace(/"$/g, "");
 }
 
 if ("DEBUG" in process.env && process.env.DEBUG !== undefined) {
@@ -296,6 +305,10 @@ for(var i = 2;i < process.argv.length; i++){
       echonetCommandTimeout = tempNo;
     }
   }
+  if(name === "--echonetPropertySyncConfigFile".toLowerCase())
+  {
+    echonetPropertySyncConfigFile = value.replace(/^"/g, "").replace(/"$/g, "");
+  }
   if(name === "--RestApiPort".toLowerCase())
   {
     const tempNo = Number(value.replace(/^"/g, "").replace(/"$/g, ""));
@@ -397,6 +410,7 @@ logger.output(`echonetDisableAutoDeviceDiscovery=${echonetDisableAutoDeviceDisco
 logger.output(`echonetCommandTimeout=${echonetCommandTimeout}`);
 logger.output(`echonetPropertyRequestRetryCount=${echonetPropertyRequestRetryCount}`);
 logger.output(`echonetPropertyRequestRetryDelay=${echonetPropertyRequestRetryDelay}`);
+logger.output(`echonetPropertySyncConfigFile=${echonetPropertySyncConfigFile}`);
 logger.output(`debugLog=${debugLog}`);
 logger.output(`restApiPort=${restApiPort}`);
 logger.output(`restApiHost=${restApiHost}`);
@@ -421,6 +435,7 @@ const inputParameters:InputParameters =
   echonetDeviceIpList,
   echonetDisableAutoDeviceDiscovery,
   echonetCommandTimeout,
+  echonetPropertySyncConfigFile,
   debugLog,
   restApiPort,
   restApiHost,
