@@ -35,7 +35,7 @@ export class PropertySyncManager {
   private readonly propertyStates: Map<string, Map<string, Map<string, PropertyState>>> = new Map();
   private timerHandle?: NodeJS.Timeout;
   private deviceStore?: DeviceStore;
-  private requestGetFn?: (ip: string, seoj: string, deoj: string, epc: string, options?: any) => Promise<any>;
+  private requestDevicePropertyFn?: (id: {id:string, ip:string, eoj:string, internalId:string}, propertyName: string, options?: any) => Promise<void>;
 
   constructor() {
   }
@@ -233,10 +233,10 @@ export class PropertySyncManager {
    */
   public startSync(
     deviceStore: DeviceStore,
-    requestGetFn: (ip: string, seoj: string, deoj: string, epc: string, options?: any) => Promise<any>
+    requestDevicePropertyFn: (id: {id:string, ip:string, eoj:string, internalId:string}, propertyName: string, options?: any) => Promise<void>
   ): void {
     this.deviceStore = deviceStore;
-    this.requestGetFn = requestGetFn;
+    this.requestDevicePropertyFn = requestDevicePropertyFn;
 
     if (this.timerHandle) {
       Logger.warn("[PropertySync]", "Sync already started");
@@ -262,7 +262,7 @@ export class PropertySyncManager {
    * タイマーループで実行される同期処理
    */
   private async processSyncLoop(): Promise<void> {
-    if (!this.config || !this.deviceStore || !this.requestGetFn) {
+    if (!this.config || !this.deviceStore || !this.requestDevicePropertyFn) {
       return;
     }
 
@@ -278,32 +278,48 @@ export class PropertySyncManager {
     // IPごとに更新リクエストを生成して実行
     for (const [ip, devices] of devicesByIp) {
       const updateRequests = this.checkAndRequestUpdates(ip, this.deviceStore);
-      
+
       if (updateRequests.length > 0) {
         Logger.debug("[PropertySync]", `${ip}: Processing ${updateRequests.length} property sync requests`);
 
         for (const req of updateRequests) {
-          Logger.debug("[PropertySync]", `${ip}: Requesting sync for ${req.eoj} ${req.epc} (${req.propertyName})`);
+          // デバイスを検索してDeviceIdを作成
+          const device = this.deviceStore.getAll().find(d => d.ip === req.ip && d.eoj === req.eoj);
+          if (!device) {
+            Logger.warn("[PropertySync]", `${ip}: Device not found for ${req.eoj}`);
+            continue;
+          }
+
+          const deviceId = {
+            id: device.id,
+            ip: device.ip,
+            eoj: device.eoj,
+            internalId: device.internalId
+          };
+
+          Logger.debug("[PropertySync]", `${ip}: Requesting sync for ${req.eoj} ${req.propertyName}`);
 
           try {
-            // requestGetをbackground優先度で実行
-            const res = await this.requestGetFn(req.ip, "0ef001", req.eoj, req.epc, {
+            // requestDevicePropertyをbackground優先度で実行
+            await this.requestDevicePropertyFn(deviceId, req.propertyName, {
               priority: 'background',
+              retryCount: 0,
+              retryDelay: 0,
               onSuccess: () => {
                 // 成功時: PropertySyncManagerに成功を通知
                 this.markAsUpdated(req.ip, req.eoj, req.propertyName);
-                Logger.debug("[PropertySync]", `${ip}: Sync success for ${req.eoj} ${req.epc} (${req.propertyName})`);
+                Logger.debug("[PropertySync]", `${ip}: Sync success for ${req.eoj} ${req.propertyName}`);
               },
               onFailure: () => {
                 // 失敗時: バックオフを増加
                 this.markAsFailed(req.ip, req.eoj, req.propertyName);
-                Logger.debug("[PropertySync]", `${ip}: Sync failed for ${req.eoj} ${req.epc} (${req.propertyName}), backoff increased`);
+                Logger.debug("[PropertySync]", `${ip}: Sync failed for ${req.eoj} ${req.propertyName}, backoff increased`);
               }
             });
           } catch (e) {
             // 例外時もバックオフを増加
             this.markAsFailed(req.ip, req.eoj, req.propertyName);
-            Logger.warn("[PropertySync]", `${ip}: Sync exception for ${req.eoj} ${req.epc} (${req.propertyName})`, {exception: e});
+            Logger.warn("[PropertySync]", `${ip}: Sync exception for ${req.eoj} ${req.propertyName}`, {exception: e});
           }
         }
       }
