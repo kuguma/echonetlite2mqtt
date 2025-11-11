@@ -272,7 +272,8 @@ export class EchoNetLiteController{
     this.deviceUpdatedListeners.forEach(_=>_(lastDevice, device));
   }
 
-
+  // ホールド機能用。
+  // https://github.com/banban525/echonetlite2mqtt/issues/21
   setDeviceProperty = async (id:DeviceId, propertyName:string, newValue:any, holdOption:HoldOption|undefined=undefined):Promise<void> =>
   {
     if(holdOption===undefined)
@@ -292,6 +293,7 @@ export class EchoNetLiteController{
     }
   };
 
+  // 指定したデバイスの指定したプロパティの値を取得する。これが一番高レイヤーのSETメソッド
   setDevicePropertyPrivate = async (id:DeviceId, propertyName:string, newValue:any):Promise<void> =>
   {
     const property = this.deviceConverter.getProperty(id.ip, id.eoj, propertyName);
@@ -414,10 +416,10 @@ export class EchoNetLiteController{
       await this.echonetLiteRawController.searchDevicesInNetwork();
       Logger.info("[ECHONETLite]", `done searching devices`);
     }
-
-    // プロパティリクエストはrequestGet/requestSetで直接処理される（重複排除機能付き）
   }
 
+
+  // 指定したデバイスの指定したプロパティの値を取得する。これが一番高レイヤーのGETメソッド
   requestDeviceProperty = async (
     id:DeviceId,
     propertyName:string,

@@ -374,7 +374,7 @@ export class PropertySyncManager {
 
       // 全デバイス・全プロパティをfire-and-forgetで投げる
       // 重複排除により実際のデバイス負荷は制御される
-      // 遅いデバイスが速いデバイスをブロックしない
+      // promiseは遅いデバイスが速いデバイスをブロックして次のループがまとめて遅延しまうため採用できない
       devicesByIp.forEach((devices, ip) => {
         const updateRequests = this.checkAndRequestUpdates(ip, deviceStore);
 

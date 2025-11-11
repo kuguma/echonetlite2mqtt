@@ -128,7 +128,7 @@ export class EchoNetLiteRawController {
         Logger.debug("[ECHONETLite][queue]", `INF queued for ${ip}, infQueue=${queue.infQueue.length}, sendQueue=${sendCount}`);
         if (queue.processing === false) {
           // INFの処理
-          this.processQueueForIp(ip);
+          this.processQueueForIp(ip); // キュープロセッサ起動
         }
       }
       this.fireReceived(rinfo, els);
@@ -305,7 +305,7 @@ export class EchoNetLiteRawController {
 
       Logger.debug("[ECHONETLite][queue]", `Command queued for ${ip} (priority=${priority}), infQueue=${queue.infQueue.length}, priority=${queue.prioritySendQueue.length}, normal=${queue.normalSendQueue.length}, background=${queue.backgroundSendQueue.length}`);
       if (queue.processing === false) {
-        this.processQueueForIp(ip);
+        this.processQueueForIp(ip); // キュープロセッサ起動
       }
     });
   }
@@ -762,7 +762,10 @@ export class EchoNetLiteRawController {
     });
   }
 
-  // コアループ。デバイスごとに単一のキューを使って処理を直列化する。
+  // これがコアループ/キュープロセッサ。get, set, infは全てここを通る（はず）。
+  // ディスカバリ系はこっちを通らないので注意。(ただしd5 = 自ノードインスタンスリスト通知はここを通る)
+  // デバイス（IP）ごとに単一のキューを使って処理を直列化している。これにより、同一デバイスに対しては並列リクエストが発生しないように制御している。
+  // 一方、このキューはデバイスごとに存在するため、異なるデバイスに対しては並列にリクエストが発生する。
   private processQueueForIp = async (ip: string):Promise<void> =>{
     const queue = this.getOrCreateIpQueue(ip);
 
@@ -796,6 +799,7 @@ export class EchoNetLiteRawController {
       Logger.debug("[ECHONETLite][queue]", `${ip}: More items in queue (inf=${queue.infQueue.length}, send=${totalSendCount}), scheduling next processing`);
       setTimeout(() => this.processQueueForIp(ip), 1);
     }
+    // なければ一度終了し、次に処理を必要とするメソッドが呼ばれたときに起動される。
   }
 
 
