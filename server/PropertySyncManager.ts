@@ -2,6 +2,7 @@ import * as fs from "fs";
 import { Logger } from "./Logger";
 import { Device } from "./Property";
 import { DeviceStore } from "./DeviceStore";
+import { Mutex } from "async-mutex";
 
 interface SyncRule {
   deviceClass: string;
@@ -36,6 +37,7 @@ export class PropertySyncManager {
   private timerHandle?: NodeJS.Timeout;
   private deviceStore?: DeviceStore;
   private requestDevicePropertyFn?: (id: {id:string, ip:string, eoj:string, internalId:string}, propertyName: string, options?: any) => Promise<void>;
+  private readonly syncMutex = new Mutex();
 
   constructor() {
   }
@@ -121,6 +123,7 @@ export class PropertySyncManager {
     state.status = 'fresh';
     state.lastUpdated = Date.now();
     state.backoffMultiplier = 1; // 成功時にバックオフをリセット
+    state.timeoutCount = 0; // 成功時にタイムアウトカウントをリセット
     if (hadBackoff) {
       Logger.debug("[PropertySync]", `${ip}:${eoj} ${propertyName}: Marked as fresh (backoff reset)`);
     } else {
@@ -262,67 +265,75 @@ export class PropertySyncManager {
    * タイマーループで実行される同期処理
    */
   private async processSyncLoop(): Promise<void> {
-    if (!this.config || !this.deviceStore || !this.requestDevicePropertyFn) {
+    // 排他制御：前回の実行が完了していない場合はスキップ
+    if (this.syncMutex.isLocked()) {
+      Logger.debug("[PropertySync]", "Previous sync still running, skipping this interval");
       return;
     }
 
-    // 全デバイスをIPごとにグループ化
-    const devicesByIp = new Map<string, any[]>();
-    for (const device of this.deviceStore.getAll()) {
-      if (!devicesByIp.has(device.ip)) {
-        devicesByIp.set(device.ip, []);
+    return this.syncMutex.runExclusive(async () => {
+      if (!this.config || !this.deviceStore || !this.requestDevicePropertyFn) {
+        return;
       }
-      devicesByIp.get(device.ip)!.push(device);
-    }
 
-    // IPごとに更新リクエストを生成して実行
-    for (const [ip, devices] of devicesByIp) {
-      const updateRequests = this.checkAndRequestUpdates(ip, this.deviceStore);
+      // 全デバイスをIPごとにグループ化
+      const devicesByIp = new Map<string, any[]>();
+      for (const device of this.deviceStore.getAll()) {
+        if (!devicesByIp.has(device.ip)) {
+          devicesByIp.set(device.ip, []);
+        }
+        devicesByIp.get(device.ip)!.push(device);
+      }
 
-      if (updateRequests.length > 0) {
-        Logger.debug("[PropertySync]", `${ip}: Processing ${updateRequests.length} property sync requests`);
+      // IPごとに更新リクエストを生成して実行
+      for (const [ip, devices] of devicesByIp) {
+        const updateRequests = this.checkAndRequestUpdates(ip, this.deviceStore);
 
-        for (const req of updateRequests) {
-          // デバイスを検索してDeviceIdを作成
-          const device = this.deviceStore.getAll().find(d => d.ip === req.ip && d.eoj === req.eoj);
-          if (!device) {
-            Logger.warn("[PropertySync]", `${ip}: Device not found for ${req.eoj}`);
-            continue;
-          }
+        if (updateRequests.length > 0) {
+          Logger.debug("[PropertySync]", `${ip}: Processing ${updateRequests.length} property sync requests`);
 
-          const deviceId = {
-            id: device.id,
-            ip: device.ip,
-            eoj: device.eoj,
-            internalId: device.internalId
-          };
+          for (const req of updateRequests) {
+            // デバイスを検索してDeviceIdを作成
+            const device = this.deviceStore.getAll().find(d => d.ip === req.ip && d.eoj === req.eoj);
+            if (!device) {
+              Logger.warn("[PropertySync]", `${ip}: Device not found for ${req.eoj}`);
+              continue;
+            }
 
-          Logger.debug("[PropertySync]", `${ip}: Requesting sync for ${req.eoj} ${req.propertyName}`);
+            const deviceId = {
+              id: device.id,
+              ip: device.ip,
+              eoj: device.eoj,
+              internalId: device.internalId
+            };
 
-          try {
-            // requestDevicePropertyをbackground優先度で実行
-            await this.requestDevicePropertyFn(deviceId, req.propertyName, {
-              priority: 'background',
-              retryCount: 0,
-              retryDelay: 0,
-              onSuccess: () => {
-                // 成功時: PropertySyncManagerに成功を通知
-                this.markAsUpdated(req.ip, req.eoj, req.propertyName);
-                Logger.debug("[PropertySync]", `${ip}: Sync success for ${req.eoj} ${req.propertyName}`);
-              },
-              onFailure: () => {
-                // 失敗時: バックオフを増加
-                this.markAsFailed(req.ip, req.eoj, req.propertyName);
-                Logger.debug("[PropertySync]", `${ip}: Sync failed for ${req.eoj} ${req.propertyName}, backoff increased`);
-              }
-            });
-          } catch (e) {
-            // 例外時もバックオフを増加
-            this.markAsFailed(req.ip, req.eoj, req.propertyName);
-            Logger.warn("[PropertySync]", `${ip}: Sync exception for ${req.eoj} ${req.propertyName}`, {exception: e});
+            Logger.debug("[PropertySync]", `${ip}: Requesting sync for ${req.eoj} ${req.propertyName}`);
+
+            try {
+              // requestDevicePropertyをbackground優先度で実行
+              await this.requestDevicePropertyFn(deviceId, req.propertyName, {
+                priority: 'background',
+                retryCount: 0,
+                retryDelay: 0,
+                onSuccess: () => {
+                  // 成功時: PropertySyncManagerに成功を通知
+                  this.markAsUpdated(req.ip, req.eoj, req.propertyName);
+                  Logger.debug("[PropertySync]", `${ip}: Sync success for ${req.eoj} ${req.propertyName}`);
+                },
+                onFailure: () => {
+                  // 失敗時: バックオフを増加
+                  this.markAsFailed(req.ip, req.eoj, req.propertyName);
+                  Logger.debug("[PropertySync]", `${ip}: Sync failed for ${req.eoj} ${req.propertyName}, backoff increased`);
+                }
+              });
+            } catch (e) {
+              // 例外時もバックオフを増加
+              this.markAsFailed(req.ip, req.eoj, req.propertyName);
+              Logger.warn("[PropertySync]", `${ip}: Sync exception for ${req.eoj} ${req.propertyName}`, {exception: e});
+            }
           }
         }
       }
-    }
+    });
   }
 }
