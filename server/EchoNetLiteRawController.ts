@@ -17,6 +17,9 @@ export interface CommandWithCallback extends Command
 }
 
 export class EchoNetLiteRawController {
+  // ディスカバリ時の長めのタイムアウト（応答が遅いデバイスに対応するため5秒に設定）
+  private static readonly DISCOVERY_TIMEOUT = 5000;
+
   private readonly nodes: RawNode[] = [];
   private readonly nodesUpdateMutex = new Mutex();
   private propertySyncManager?: PropertySyncManager;
@@ -378,11 +381,11 @@ export class EchoNetLiteRawController {
       let res: CommandResponse;
       try
       {
-        res = await EchoNetCommunicator.execCommandPromise(nodeIp, "0ef001", device.eoj, ELSV.GET, epc, "");
+        res = await EchoNetCommunicator.execCommandPromise(nodeIp, "0ef001", device.eoj, ELSV.GET, epc, "", EchoNetLiteRawController.DISCOVERY_TIMEOUT);
       }
       catch(e)
       {
-        Logger.warn("[ECHONETLite][raw]", `error collectDeviceDetails: get ${epc}: exception from ${nodeIp},${device.eoj}`, {exception:e});
+        Logger.warn("[ECHONETLite][raw]", `error collectDeviceDetails: get ${epc}: exception from ${nodeIp},${device.eoj} err=${(e as Error).message}`, {exception:e});
         continue;
       }
       const response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && (epc in _.els.DETAILs));
@@ -472,7 +475,7 @@ export class EchoNetLiteRawController {
     if (idProperty === undefined) {
       let res: CommandResponse;
       try {
-        res = await EchoNetCommunicator.execCommandPromise(device.ip, '0ef001', device.eoj, ELSV.GET, "83", "");
+        res = await EchoNetCommunicator.execCommandPromise(device.ip, '0ef001', device.eoj, ELSV.GET, "83", "", EchoNetLiteRawController.DISCOVERY_TIMEOUT);
       }
       catch (e) {
         device.noExistsId = true;
@@ -806,7 +809,7 @@ export class EchoNetLiteRawController {
 
     let res: CommandResponse;
     try {
-      res = await EchoNetCommunicator.execCommandPromise(ip, '0ef001', '0ef001', ELSV.GET, "d6", "");
+      res = await EchoNetCommunicator.execCommandPromise(ip, '0ef001', '0ef001', ELSV.GET, "d6", "", EchoNetLiteRawController.DISCOVERY_TIMEOUT);
     }
     catch (e) {
       Logger.warn("[ECHONETLite][discovery]", `Discovery failed for ${ip}: timeout`, {exception:e});

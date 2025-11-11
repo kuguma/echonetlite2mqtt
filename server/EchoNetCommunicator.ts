@@ -207,7 +207,8 @@ export class EchoNetCommunicator
     deoj: string,
     esv: string,
     epc: string,
-    edt: string
+    edt: string,
+    timeout?: number
   ): Promise<CommandResponse>
   {
     const command:Command = {
@@ -234,12 +235,14 @@ export class EchoNetCommunicator
     const commandResponse = new CommandResponse(command);
     // Logger.debug("[ECHONETLite][tid]", `Command sent: TID=${command.tid}, ${ip} ${seoj}->${deoj} ESV=${esv} EPC=${epc} (pending=${this.commandResponses.size + 1})`);
 
+    const effectiveTimeout = timeout !== undefined ? timeout : this.commandTimeout;
+
     return new Promise<CommandResponse>((resolve,reject)=>{
       const handle = setTimeout(()=>{
         this.commandResponses.delete(command.tid);
         // Logger.debug("[ECHONETLite][tid]", `Command timeout: TID=${command.tid}, ${ip} ${seoj}->${deoj} ESV=${esv} EPC=${epc}`);
         reject({message:"timeout", commandResponse});
-      }, this.commandTimeout);
+      }, effectiveTimeout);
       
       commandResponse.timeoutHandle = handle;
       commandResponse.setCallback(()=>{
