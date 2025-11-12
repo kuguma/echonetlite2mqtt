@@ -132,7 +132,9 @@ export class EchoNetLiteRawController {
 
   /**
    * GETリクエストを発行（重複排除あり）
-   * 同じIP/EOJ/EPCへの同時リクエストは1つに統合される
+   * 同じIP/EOJ/EPCへのリクエストが既にあった場合、新しいものは握りつぶす（onSuccess/onFailureは呼ばれない）
+   * 握りつぶすよりは例外&理由通知の方が理想的だが、今のところはたまたま困るケースが無いのでこれでもなんとかなっているという状況のはず。
+   * 呼び出し元が違う、みたいなケースをかんがえるとしっかり対処してあげる必要はある。TODO
    */
   public requestGet = async (
     ip: string,
@@ -195,7 +197,8 @@ export class EchoNetLiteRawController {
 
   /**
    * SETリクエストを発行（重複排除あり）
-   * 同じIP/EOJ/EPCへの連続リクエストは最新値のみが実行される
+   * 同じIP/EOJ/EPCが既にあった場合、新しいものは握りつぶし、古いものの値を最新値で上書きする
+   * 重複時のonSuccess/onFailureの対処は考えるのが面倒なので上流のAPIからは外している。呼び出し主体が違う場合は面倒なことになるはず。TODO
    */
   public requestSet = async (
     ip: string,
