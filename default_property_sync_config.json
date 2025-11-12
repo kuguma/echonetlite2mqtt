@@ -16,6 +16,7 @@
 
     { "deviceClass": "waterFlowMeter", "properties": ["cumulativeFlowingWater"], "intervalSec": 300 },
     { "deviceClass": "gasMeter", "properties": ["cumulativeGasConsumption"], "intervalSec": 300 },
+    { "deviceClass": "hybridWaterHeater", "properties": ["remainingWater", "hotWaterSupplyStatus", "waterHeatingStatus"], "intervalSec": 5 },
 
     { "deviceClass": "pvPowerGeneration", "properties": ["*"], "intervalSec": 300 },
     { "deviceClass": "storageBattery", "properties": ["*"], "intervalSec": 300 },
