@@ -1,7 +1,7 @@
 import { eldata,rinfo } from "echonet-lite";
 import { AliasOption, Device, DeviceId } from "./Property";
 import EchoNetDeviceConverter from "./EchoNetDeviceConverter";
-import { EchoNetLiteRawController } from "./EchoNetLiteRawController";
+import { EchoNetLiteRawController, QueuePriority } from "./EchoNetLiteRawController";
 import { EchoNetHoldController } from "./EchoNetHoldController";
 import { HoldOption } from "./MqttController";
 import { ELSV, CommandResponse } from "./EchoNetCommunicator";
@@ -294,7 +294,11 @@ export class EchoNetLiteController{
   };
 
   // 指定したデバイスの指定したプロパティの値を取得する。これが一番高レイヤーのSETメソッド
-  setDevicePropertyPrivate = async (id:DeviceId, propertyName:string, newValue:any):Promise<void> =>
+  setDevicePropertyPrivate = async (id:DeviceId, propertyName:string, newValue:any, options?: {
+    priority?: QueuePriority;
+    retryCount?: number;
+    retryDelay?: number;
+  }):Promise<void> =>
   {
     const property = this.deviceConverter.getProperty(id.ip, id.eoj, propertyName);
     if(property === undefined)
@@ -316,20 +320,15 @@ export class EchoNetLiteController{
       epc = epc.replace(/^0x/gi, "");
     }
 
+    // オプションから設定を取得（指定がなければデフォルト値を使用）
+    const retryCount = options?.retryCount !== undefined ? options.retryCount : this.propertyRequestRetryCount;
+    const retryDelay = options?.retryDelay !== undefined ? options.retryDelay : this.propertyRequestRetryDelay;
+
     // SET操作（重複排除あり）
     {
-      let res: CommandResponse;
-      try {
-        res = await this.echonetLiteRawController.requestSet(id.ip, "05ff01", id.eoj, epc, echoNetData);
-      } catch (e) {
-        // 重複SETの場合は最新値で上書きされるので続行
-        if (String(e).includes("Duplicate")) {
-          Logger.debug("[ECHONETLite]", `setDeviceProperty: duplicate request, value will be updated for ${id.ip} ${id.eoj} ${epc}`);
-        } else {
-          throw e;
-        }
-        return;
-      }
+      const res = await this.echonetLiteRawController.requestSet(id.ip, "05ff01", id.eoj, epc, echoNetData, {
+        priority: options?.priority || 'priority'
+      });
 
       const response = res.matchResponse(_=>_.els.ESV === ELSV.SET_RES);
       if(response === undefined)
@@ -344,9 +343,11 @@ export class EchoNetLiteController{
       let res: CommandResponse | undefined;
       let response;
 
-      for(let attempt = 0; attempt <= this.propertyRequestRetryCount; attempt++)
+      for(let attempt = 0; attempt <= retryCount; attempt++)
       {
-        res = await this.echonetLiteRawController.requestGet(id.ip, "05ff01", id.eoj, epc);
+        res = await this.echonetLiteRawController.requestGet(id.ip, "05ff01", id.eoj, epc, {
+          priority: options?.priority || 'priority'
+        });
         response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && (epc in _.els.DETAILs));
 
         if(response !== undefined)
@@ -356,14 +357,14 @@ export class EchoNetLiteController{
         }
 
         // 失敗: まだリトライ可能か確認
-        if(attempt < this.propertyRequestRetryCount)
+        if(attempt < retryCount)
         {
-          Logger.warn("[ECHONETLite]", `setDeviceProperty: retry get property value (attempt ${attempt + 1}/${this.propertyRequestRetryCount}). epc=${epc}`, {responses:res.responses, command:res.command});
+          Logger.warn("[ECHONETLite]", `setDeviceProperty: retry get property value (attempt ${attempt + 1}/${retryCount}). epc=${epc}`, {responses:res.responses, command:res.command});
 
           // リトライ間隔が設定されている場合は待機
-          if(this.propertyRequestRetryDelay > 0)
+          if(retryDelay > 0)
           {
-            await new Promise(resolve => setTimeout(resolve, this.propertyRequestRetryDelay));
+            await new Promise(resolve => setTimeout(resolve, retryDelay));
           }
         }
       }
