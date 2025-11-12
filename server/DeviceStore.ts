@@ -1,10 +1,12 @@
 import { getUtcNowDateTimeText } from "./datetimeLib";
 import { Device } from "./Property";
+import { PropertySyncManager } from "./PropertySyncManager";
 
 
 export class DeviceStore{
 
     private list:Device[] = [];
+    private propertySyncManager?: PropertySyncManager;
   
     public exists = (internalId:string):boolean=>{
       return this.list.find(_=>_.internalId === internalId) !== undefined;
@@ -61,6 +63,18 @@ export class DeviceStore{
       }
       device.propertiesValue[propertyName].value=newValue;
       device.propertiesValue[propertyName].updated=getUtcNowDateTimeText();
+
+      // PropertySyncManagerに更新を通知
+      if(this.propertySyncManager) {
+        this.propertySyncManager.markAsUpdated(device.ip, device.eoj, propertyName);
+      }
+    }
+
+    /**
+     * PropertySyncManagerを設定
+     */
+    public setPropertySyncManager(manager: PropertySyncManager): void {
+      this.propertySyncManager = manager;
     }
   }
   

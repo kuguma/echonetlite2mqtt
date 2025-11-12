@@ -3,6 +3,7 @@ import { HoldOption, MqttController } from "./MqttController";
 import { DeviceStore } from "./DeviceStore";
 import { EchoNetLiteController } from "./EchoNetLiteController";
 import { RestApiController } from "./RestApiController";
+import { PropertySyncManager } from "./PropertySyncManager";
 import fs from "fs";
 import mqtt from "mqtt";
 import { SystemStatusRepositry } from "./ApiTypes";
@@ -59,6 +60,7 @@ interface InputParameters{
   echonetDeviceIpList:string;
   echonetDisableAutoDeviceDiscovery:boolean;
   echonetCommandTimeout:number;
+  echonetPropertySyncConfigFile:string;
   debugLog:boolean;
   restApiPort:number;
   restApiHost:string;
@@ -84,6 +86,7 @@ let echonetDisableAutoDeviceDiscovery = false;
 let echonetCommandTimeout = 3000;
 let echonetPropertyRequestRetryCount = 1;
 let echonetPropertyRequestRetryDelay = 0;
+let echonetPropertySyncConfigFile = "";
 let debugLog = false;
 let restApiPort = 3000;
 let restApiHost = "0.0.0.0";
@@ -172,6 +175,13 @@ if( "ECHONET_PROPERTY_REQUEST_RETRY_DELAY" in process.env &&
   {
     echonetPropertyRequestRetryDelay = tempNo;
   }
+}
+
+if (
+  "ECHONET_PROPERTY_SYNC_CONFIG_FILE" in process.env &&
+  process.env.ECHONET_PROPERTY_SYNC_CONFIG_FILE !== undefined
+) {
+  echonetPropertySyncConfigFile = process.env.ECHONET_PROPERTY_SYNC_CONFIG_FILE.replace(/^"/g, "").replace(/"$/g, "");
 }
 
 if ("DEBUG" in process.env && process.env.DEBUG !== undefined) {
@@ -296,6 +306,10 @@ for(var i = 2;i < process.argv.length; i++){
       echonetCommandTimeout = tempNo;
     }
   }
+  if(name === "--echonetPropertySyncConfigFile".toLowerCase())
+  {
+    echonetPropertySyncConfigFile = value.replace(/^"/g, "").replace(/"$/g, "");
+  }
   if(name === "--RestApiPort".toLowerCase())
   {
     const tempNo = Number(value.replace(/^"/g, "").replace(/"$/g, ""));
@@ -397,6 +411,7 @@ logger.output(`echonetDisableAutoDeviceDiscovery=${echonetDisableAutoDeviceDisco
 logger.output(`echonetCommandTimeout=${echonetCommandTimeout}`);
 logger.output(`echonetPropertyRequestRetryCount=${echonetPropertyRequestRetryCount}`);
 logger.output(`echonetPropertyRequestRetryDelay=${echonetPropertyRequestRetryDelay}`);
+logger.output(`echonetPropertySyncConfigFile=${echonetPropertySyncConfigFile}`);
 logger.output(`debugLog=${debugLog}`);
 logger.output(`restApiPort=${restApiPort}`);
 logger.output(`restApiHost=${restApiHost}`);
@@ -421,6 +436,7 @@ const inputParameters:InputParameters =
   echonetDeviceIpList,
   echonetDisableAutoDeviceDiscovery,
   echonetCommandTimeout,
+  echonetPropertySyncConfigFile,
   debugLog,
   restApiPort,
   restApiHost,
@@ -816,4 +832,33 @@ if(mqttBroker === "")
   logger.output(`[MQTT] mqttBroker is not configured.`);
 }
 
-echoNetListController.start();
+echoNetListController.start().then(() => {
+  // PropertySync機能の開始
+  if(echonetPropertySyncConfigFile !== "" && fs.existsSync(echonetPropertySyncConfigFile))
+  {
+    const propertySyncManager = new PropertySyncManager();
+    propertySyncManager.loadConfig(echonetPropertySyncConfigFile);
+
+    // DeviceStoreにPropertySyncManagerを設定
+    deviceStore.setPropertySyncManager(propertySyncManager);
+
+    // RawControllerにPropertySyncManagerとDeviceStoreを設定
+    echoNetListController.getRawController().setPropertySyncManager(propertySyncManager, deviceStore);
+
+    // PropertySyncManagerのタイマーループを開始
+    propertySyncManager.startSync(
+      deviceStore,
+      (id, propertyName, options) => echoNetListController.requestDeviceProperty(id, propertyName, options)
+    );
+
+    Logger.info("[PropertySync]", `PropertySync enabled with config: ${echonetPropertySyncConfigFile}`);
+  }
+  else if(echonetPropertySyncConfigFile !== "")
+  {
+    Logger.warn("[PropertySync]", `PropertySync config file not found: ${echonetPropertySyncConfigFile}`);
+  }
+  else
+  {
+    Logger.info("[PropertySync]", "PropertySync disabled (no config file specified)");
+  }
+});
