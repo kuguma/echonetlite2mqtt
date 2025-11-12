@@ -1,8 +1,12 @@
 import * as fs from "fs";
 import { Logger } from "./Logger";
-import { Device } from "./Property";
 import { DeviceStore } from "./DeviceStore";
 import { Mutex } from "async-mutex";
+
+// Constants for property sync behavior
+const DEAD_RETRY_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_BACKOFF_MULTIPLIER = 16;
+const DEAD_MARK_TIMEOUT_THRESHOLD = 10;
 
 interface SyncRule {
   deviceClass: string;
@@ -84,10 +88,9 @@ export class PropertySyncManager {
         // 死亡マークされたプロパティはスキップ（ただし24時間に1回はリトライチャンスを与える）
         if (state.dead) {
           const timeSinceLastRetry = now - state.lastDeadRetryAttempt;
-          const RETRY_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24時間
 
-          if (timeSinceLastRetry < RETRY_INTERVAL_MS) {
-            Logger.debug("[PropertySync]", `${deviceKey} ${propName}: Skipped (marked as DEAD, next retry in ${Math.floor((RETRY_INTERVAL_MS - timeSinceLastRetry) / 3600000)}h)`);
+          if (timeSinceLastRetry < DEAD_RETRY_INTERVAL_MS) {
+            Logger.debug("[PropertySync]", `${deviceKey} ${propName}: Skipped (marked as DEAD, next retry in ${Math.floor((DEAD_RETRY_INTERVAL_MS - timeSinceLastRetry) / 3600000)}h)`);
             continue;
           } else {
             Logger.info("[PropertySync]", `${deviceKey} ${propName}: Retry attempt for DEAD property (24h elapsed)`);
@@ -160,11 +163,11 @@ export class PropertySyncManager {
   public markAsFailed(ip: string, eoj: string, propertyName: string): void {
     const state = this.getOrCreateState(ip, eoj, propertyName);
     // バックオフ係数を増加（最大16倍）
-    state.backoffMultiplier = Math.min(state.backoffMultiplier * 2, 16);
+    state.backoffMultiplier = Math.min(state.backoffMultiplier * 2, MAX_BACKOFF_MULTIPLIER);
     state.timeoutCount++;
 
     // タイムアウトが10回以上かつバックオフ最大なら死亡マーク
-    if (state.timeoutCount >= 10 && state.backoffMultiplier >= 16) {
+    if (state.timeoutCount >= DEAD_MARK_TIMEOUT_THRESHOLD && state.backoffMultiplier >= MAX_BACKOFF_MULTIPLIER) {
       state.dead = true;
       Logger.warn("[PropertySync]", `${ip}:${eoj} ${propertyName}: Marked as DEAD after ${state.timeoutCount} consecutive failures`);
     } else {

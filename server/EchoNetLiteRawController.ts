@@ -643,16 +643,9 @@ export class EchoNetLiteRawController {
   private async processSendQueue(ip: string, queue: ReturnType<typeof this.getOrCreateIpQueue>): Promise<number> {
     let sendProcessed = 0;
 
-    // 優先度順に処理：priority → normal → background
-    const queues = [
-      { queue: queue.prioritySendQueue, name: 'priority' },
-      { queue: queue.normalSendQueue, name: 'normal' },
-      { queue: queue.backgroundSendQueue, name: 'background' }
-    ];
-
     while (queue.prioritySendQueue.length > 0 || queue.normalSendQueue.length > 0 || queue.backgroundSendQueue.length > 0) {
       let command: CommandWithCallback | undefined;
-      let queueName: string = 'no_set'
+      let queueName: string = 'no_set';
 
       // 優先度順に1つのコマンドを取得
       if (queue.prioritySendQueue.length > 0) {

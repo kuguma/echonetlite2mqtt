@@ -14,7 +14,7 @@
     { "deviceClass": "floorHeater", "properties": ["onTimerReservation", "timeOfOnTimer", "offTimerReservation", "timeOfOffTimer", "dailyTimer", "targetTemperature", "targetTemperature2"], "intervalSec": 5 },
     { "deviceClass": "floorHeater", "properties": ["measuredRoomTemperature"], "intervalSec": 30 },
 
-    { "deviceClass": "waterFlowMeter", "properties": ["cumulativeFlowingWater　"], "intervalSec": 300 },
+    { "deviceClass": "waterFlowMeter", "properties": ["cumulativeFlowingWater"], "intervalSec": 300 },
     { "deviceClass": "gasMeter", "properties": ["cumulativeGasConsumption"], "intervalSec": 300 },
 
     { "deviceClass": "pvPowerGeneration", "properties": ["*"], "intervalSec": 300 },
