@@ -725,6 +725,9 @@ export class EchoNetLiteRawController {
         });
       });
 
+      // 新しいデバイスが追加されたため、探索未完了状態に戻す
+      foundNode.discoveryComplete = false;
+
       // 新しいデバイスを通知（軽量な状態で）
       this.fireDeviceDetected(foundNode.ip, foundNode.devices.map(_=>_.eoj));
 
