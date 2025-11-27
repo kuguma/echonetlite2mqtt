@@ -22,6 +22,14 @@ export class EchoNetLiteRawController {
   private propertySyncManager?: PropertySyncManager;
   private deviceStore?: DeviceStore;
 
+  // デバイス探索設定
+  private knownDeviceIpList: string[] = [];
+  private enableMulticastSearch: boolean = false;
+
+  // 定期探索機能
+  private periodicSearchIntervalSec?: number;
+  private periodicSearchTimer?: NodeJS.Timeout;
+
   // IP別のキュー構造
   private readonly ipQueues: Map<string, {
     discoveryQueue: Response[];            // デバイス探索専用（d5, d6）
@@ -960,8 +968,17 @@ export class EchoNetLiteRawController {
   }
 
 
-  public initialize = async (objList:string[], echonetTargetNetwork:string, commandTimeout:number):Promise<void> =>
+  public initialize = async (
+    objList:string[],
+    echonetTargetNetwork:string,
+    commandTimeout:number,
+    knownDeviceIpList: string[] = [],
+    enableMulticastSearch: boolean = false
+  ):Promise<void> =>
   {
+    this.knownDeviceIpList = knownDeviceIpList;
+    this.enableMulticastSearch = enableMulticastSearch;
+
     await EchoNetCommunicator.initialize(objList, 4, { v4: echonetTargetNetwork, autoGetProperties: false },
       commandTimeout);
   }
@@ -978,6 +995,79 @@ export class EchoNetLiteRawController {
     // d6応答はGET_RESとしてキュー経由で処理される
     Logger.info("[ECHONETLite][discovery]", "Sending multicast discovery request (non-blocking)");
     EchoNetCommunicator.sendNow('224.0.23.0', '0ef001', '0ef001', ELSV.GET, "d6", "");
+  }
+
+  /**
+   * デバイス探索を実行（マルチキャスト + 指定IPへのユニキャスト）
+   * 起動時と定期探索の両方から呼び出される共通メソッド
+   */
+  public executeDeviceSearch(): void {
+    Logger.debug("[ECHONETLite][discovery]", "Executing device search");
+
+    // 1. 指定IPへのユニキャスト探索
+    if (this.knownDeviceIpList.length > 0) {
+      Logger.info("[ECHONETLite][discovery]", `Sending unicast discovery to ${this.knownDeviceIpList.length} specified IPs`);
+      this.knownDeviceIpList.forEach(ip => {
+        this.searchDeviceFromIp(ip);
+      });
+    }
+
+    // 2. マルチキャスト探索（有効な場合のみ）
+    if (this.enableMulticastSearch) {
+      Logger.info("[ECHONETLite][discovery]", "Sending multicast discovery request");
+      this.searchDevicesInNetwork();
+    }
+  }
+
+  /**
+   * 定期探索の間隔を設定し、機能を有効化/無効化する
+   * @param intervalSec 探索間隔（秒）。undefinedの場合は機能を無効化
+   */
+  public setPeriodicSearchInterval(intervalSec?: number): void {
+    this.periodicSearchIntervalSec = intervalSec;
+
+    if (intervalSec !== undefined && intervalSec > 0) {
+      this.startPeriodicSearch();
+    } else {
+      this.stopPeriodicSearch();
+    }
+  }
+
+  /**
+   * 定期探索を開始する
+   */
+  private startPeriodicSearch(): void {
+    if (this.periodicSearchTimer) {
+      Logger.warn("[ECHONETLite][periodic-search]", "Periodic search already running");
+      return;
+    }
+
+    if (!this.periodicSearchIntervalSec || this.periodicSearchIntervalSec <= 0) {
+      Logger.warn("[ECHONETLite][periodic-search]", "Invalid interval, periodic search not started");
+      return;
+    }
+
+    const intervalMs = this.periodicSearchIntervalSec * 1000;
+    Logger.info("[ECHONETLite][periodic-search]", `Starting periodic device search (interval: ${this.periodicSearchIntervalSec}s)`);
+
+    // 即座に1回実行
+    this.executeDeviceSearch();
+
+    // 定期実行を開始
+    this.periodicSearchTimer = setInterval(() => {
+      this.executeDeviceSearch();
+    }, intervalMs);
+  }
+
+  /**
+   * 定期探索を停止する
+   */
+  private stopPeriodicSearch(): void {
+    if (this.periodicSearchTimer) {
+      clearInterval(this.periodicSearchTimer);
+      this.periodicSearchTimer = undefined;
+      Logger.info("[ECHONETLite][periodic-search]", "Periodic device search stopped");
+    }
   }
 
   private deviceDetectedListeners:((ip:string, eojList:string[])=>void)[] = [];

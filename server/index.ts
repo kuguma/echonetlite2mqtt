@@ -61,6 +61,7 @@ interface InputParameters{
   echonetDisableAutoDeviceDiscovery:boolean;
   echonetCommandTimeout:number;
   echonetPropertySyncConfigFile:string;
+  echonetPeriodicSearchInterval:number;
   debugLog:boolean;
   restApiPort:number;
   restApiHost:string;
@@ -87,6 +88,7 @@ let echonetCommandTimeout = 3000;
 let echonetPropertyRequestRetryCount = 1;
 let echonetPropertyRequestRetryDelay = 0;
 let echonetPropertySyncConfigFile = "";
+let echonetPeriodicSearchInterval = 0;
 let debugLog = false;
 let restApiPort = 3000;
 let restApiHost = "0.0.0.0";
@@ -182,6 +184,17 @@ if (
   process.env.ECHONET_PROPERTY_SYNC_CONFIG_FILE !== undefined
 ) {
   echonetPropertySyncConfigFile = process.env.ECHONET_PROPERTY_SYNC_CONFIG_FILE.replace(/^"/g, "").replace(/"$/g, "");
+}
+
+if( "ECHONET_PERIODIC_SEARCH_INTERVAL" in process.env &&
+  process.env.ECHONET_PERIODIC_SEARCH_INTERVAL !== undefined)
+{
+  const temp = process.env.ECHONET_PERIODIC_SEARCH_INTERVAL.replace(/^"/g, "").replace(/"$/g, "");
+  const tempNo = Number(temp);
+  if(isNaN(tempNo)===false && tempNo >= 0)
+  {
+    echonetPeriodicSearchInterval = tempNo;
+  }
 }
 
 if ("DEBUG" in process.env && process.env.DEBUG !== undefined) {
@@ -310,6 +323,14 @@ for(var i = 2;i < process.argv.length; i++){
   {
     echonetPropertySyncConfigFile = value.replace(/^"/g, "").replace(/"$/g, "");
   }
+  if(name === "--echonetPeriodicSearchInterval".toLowerCase())
+  {
+    const tempNo = Number(value.replace(/^"/g, "").replace(/"$/g, ""));
+    if(value!=="" && isNaN(tempNo)===false && tempNo >= 0)
+    {
+      echonetPeriodicSearchInterval = tempNo;
+    }
+  }
   if(name === "--RestApiPort".toLowerCase())
   {
     const tempNo = Number(value.replace(/^"/g, "").replace(/"$/g, ""));
@@ -412,6 +433,7 @@ logger.output(`echonetCommandTimeout=${echonetCommandTimeout}`);
 logger.output(`echonetPropertyRequestRetryCount=${echonetPropertyRequestRetryCount}`);
 logger.output(`echonetPropertyRequestRetryDelay=${echonetPropertyRequestRetryDelay}`);
 logger.output(`echonetPropertySyncConfigFile=${echonetPropertySyncConfigFile}`);
+logger.output(`echonetPeriodicSearchInterval=${echonetPeriodicSearchInterval}`);
 logger.output(`debugLog=${debugLog}`);
 logger.output(`restApiPort=${restApiPort}`);
 logger.output(`restApiHost=${restApiHost}`);
@@ -437,6 +459,7 @@ const inputParameters:InputParameters =
   echonetDisableAutoDeviceDiscovery,
   echonetCommandTimeout,
   echonetPropertySyncConfigFile,
+  echonetPeriodicSearchInterval,
   debugLog,
   restApiPort,
   restApiHost,
@@ -861,5 +884,16 @@ echoNetListController.start().then(() => {
   else
   {
     Logger.info("[PropertySync]", "PropertySync disabled (no config file specified)");
+  }
+
+  // 定期探索機能の開始
+  if(echonetPeriodicSearchInterval > 0)
+  {
+    echoNetListController.getRawController().setPeriodicSearchInterval(echonetPeriodicSearchInterval);
+    Logger.info("[PeriodicSearch]", `Periodic device search enabled (interval: ${echonetPeriodicSearchInterval}s)`);
+  }
+  else
+  {
+    Logger.info("[PeriodicSearch]", "Periodic device search disabled");
   }
 });
