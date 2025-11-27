@@ -399,23 +399,18 @@ export class EchoNetLiteController{
 
     await (new Promise<void>((resolve)=>setTimeout(()=>resolve(), 1000)));
 
+    // デバイス探索（ノンブロッキング：要求を送信するのみ、応答はキュー経由で処理される）
     if(this.knownDeviceIpList.length > 0)
     {
-      Logger.info("[ECHONETLite]", `collecting devices from ${this.knownDeviceIpList.length} known IPs (parallel)`);
-      const results = await Promise.allSettled(
-        this.knownDeviceIpList.map(ip =>
-          this.echonetLiteRawController.searchDeviceFromIp(ip)
-        )
+      Logger.info("[ECHONETLite]", `sending discovery requests to ${this.knownDeviceIpList.length} known IPs`);
+      this.knownDeviceIpList.forEach(ip =>
+        this.echonetLiteRawController.searchDeviceFromIp(ip)
       );
-      const successCount = results.filter(r => r.status === "fulfilled").length;
-      const failCount = results.filter(r => r.status === "rejected").length;
-      Logger.info("[ECHONETLite]", `done collecting devices (success=${successCount}, failed=${failCount})`);
     }
     if(this.searchDevices)
     {
-      Logger.info("[ECHONETLite]", `searching devices...`);
-      await this.echonetLiteRawController.searchDevicesInNetwork();
-      Logger.info("[ECHONETLite]", `done searching devices`);
+      Logger.info("[ECHONETLite]", `sending multicast discovery request`);
+      this.echonetLiteRawController.searchDevicesInNetwork();
     }
   }
 
@@ -433,10 +428,13 @@ export class EchoNetLiteController{
     }
   ):Promise<void> =>
   {
+    const priority = options?.priority || 'normal';
+    const deviceInfo = `${id.ip} ${id.eoj} ${propertyName}`;
+
     const property = this.deviceConverter.getProperty(id.ip, id.eoj, propertyName);
     if(property === undefined)
     {
-      Logger.warn("[ECHONETLite]", `requestDeviceProperty property === undefined propertyName=${propertyName}`);
+      Logger.warn("[ECHONETLite]", `requestDeviceProperty: property not found (${deviceInfo})`);
       if(options?.onFailure) options.onFailure();
       return;
     }
@@ -450,6 +448,8 @@ export class EchoNetLiteController{
     // オプションから設定を取得（指定がなければデフォルト値を使用）
     const retryCount = options?.retryCount !== undefined ? options.retryCount : this.propertyRequestRetryCount;
     const retryDelay = options?.retryDelay !== undefined ? options.retryDelay : this.propertyRequestRetryDelay;
+
+    Logger.debug("[ECHONETLite]", `requestDeviceProperty: requesting ${deviceInfo} (epc=${epc}, priority=${priority}, retryCount=${retryCount})`);
 
     // リトライロジック
     for(let attempt = 0; attempt <= retryCount; attempt++)
@@ -466,9 +466,11 @@ export class EchoNetLiteController{
         const value = this.deviceConverter.convertPropertyValue(property, response.els.DETAILs[epc]);
         if(value === undefined)
         {
+          Logger.warn("[ECHONETLite]", `requestDeviceProperty: conversion failed (${deviceInfo}, epc=${epc})`);
           if(options?.onFailure) options.onFailure();
           return;
         }
+        Logger.debug("[ECHONETLite]", `requestDeviceProperty: success (${deviceInfo}, epc=${epc}, priority=${priority})`);
         this.firePropertyChangedEvent(id.ip, id.eoj, property.name, value);
         if(options?.onSuccess) options.onSuccess();
         return;
@@ -477,7 +479,7 @@ export class EchoNetLiteController{
       // 失敗: まだリトライ可能か確認
       if(attempt < retryCount)
       {
-        Logger.debug("[ECHONETLite]", `requestDeviceProperty: retry get property value (attempt ${attempt + 1}/${retryCount}). epc=${epc}`, {responses:res.responses, command:res.command});
+        Logger.debug("[ECHONETLite]", `requestDeviceProperty: retry (${deviceInfo}, epc=${epc}, attempt=${attempt + 1}/${retryCount})`, {responses:res.responses, command:res.command});
 
         // リトライ間隔が設定されている場合は待機
         if(retryDelay > 0)
@@ -488,7 +490,7 @@ export class EchoNetLiteController{
       else
       {
         // すべてのリトライが失敗
-        Logger.warn("[ECHONETLite]", `requestDeviceProperty: cannot get property value after ${retryCount + 1} attempts. epc=${epc}`, {responses:res.responses, command:res.command});
+        Logger.warn("[ECHONETLite]", `requestDeviceProperty: failed after ${retryCount + 1} attempts (${deviceInfo}, epc=${epc}, priority=${priority})`, {responses:res.responses, command:res.command});
         if(options?.onFailure) options.onFailure();
       }
     }

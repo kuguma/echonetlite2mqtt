@@ -17,9 +17,6 @@ export interface CommandWithCallback extends Command
 }
 
 export class EchoNetLiteRawController {
-  // ディスカバリ時の長めのタイムアウト（応答が遅いデバイスに対応するため5秒に設定）
-  private static readonly DISCOVERY_TIMEOUT = 5000;
-
   private readonly nodes: RawNode[] = [];
   private readonly nodesUpdateMutex = new Mutex();
   private propertySyncManager?: PropertySyncManager;
@@ -27,6 +24,7 @@ export class EchoNetLiteRawController {
 
   // IP別のキュー構造
   private readonly ipQueues: Map<string, {
+    discoveryQueue: Response[];            // デバイス探索専用（d5, d6）
     infQueue: Response[];
     prioritySendQueue: CommandWithCallback[];  // 最優先（REST/MQTT set用）
     normalSendQueue: CommandWithCallback[];    // 通常（REST/MQTT get用）
@@ -44,11 +42,22 @@ export class EchoNetLiteRawController {
   // 同一ノードに対する並行getNewNode呼び出しを防ぎ、デバイス保護を維持
   private readonly deviceCollectionMutexes: Map<string, Mutex> = new Map();
 
+  // デバイス収集ミューテックスの取得または作成
+  private getDeviceCollectionMutex(ip: string): Mutex {
+    let mutex = this.deviceCollectionMutexes.get(ip);
+    if (!mutex) {
+      mutex = new Mutex();
+      this.deviceCollectionMutexes.set(ip, mutex);
+    }
+    return mutex;
+  }
+
   // IP別キューの取得または作成
   private getOrCreateIpQueue(ip: string) {
     let queue = this.ipQueues.get(ip);
     if (!queue) {
       queue = {
+        discoveryQueue: [],
         infQueue: [],
         prioritySendQueue: [],
         normalSendQueue: [],
@@ -85,31 +94,25 @@ export class EchoNetLiteRawController {
     });
   }
 
-  // デバイス収集の排他制御（ノードIP別）
-  // 同一ノードに対する並行getNewNode呼び出しを防ぎ、デバイスへの並列リクエストを回避
-  private async getNewNodeWithLock(node: RawNode): Promise<RawNode> {
-    const nodeKey = node.ip;
-
-    // IP別のMutexを取得または作成
-    if (!this.deviceCollectionMutexes.has(nodeKey)) {
-      this.deviceCollectionMutexes.set(nodeKey, new Mutex());
-    }
-    const mutex = this.deviceCollectionMutexes.get(nodeKey)!;
-
-    return mutex.runExclusive(async () => {
-      Logger.debug("[ECHONETLite][lock]", `Starting device collection for ${nodeKey}`);
-      const result = await EchoNetLiteRawController.getNewNode(node);
-      Logger.debug("[ECHONETLite][lock]", `Completed device collection for ${nodeKey}`);
-      return result;
-    });
-  }
-
   constructor() {
-    
+
     EchoNetCommunicator.addReveivedHandler((rinfo, els) => {
-      if (els.ESV === ELSV.INF) {
-        const ip = rinfo.address;
-        const queue = this.getOrCreateIpQueue(ip);
+      const ip = rinfo.address;
+      const queue = this.getOrCreateIpQueue(ip);
+
+      // d5を含むINF → discoveryQueue
+      if (els.ESV === ELSV.INF && "d5" in els.DETAILs) {
+        queue.discoveryQueue.push({
+          rinfo: rinfo,
+          els: els
+        });
+        Logger.debug("[ECHONETLite][queue]", `INF d5 queued for ${ip}, discoveryQueue=${queue.discoveryQueue.length}`);
+        if (queue.processing === false) {
+          this.processQueueForIp(ip);
+        }
+      }
+      // d5を含まない通常のINF → infQueue
+      else if (els.ESV === ELSV.INF) {
         queue.infQueue.push({
           rinfo: rinfo,
           els: els
@@ -117,10 +120,22 @@ export class EchoNetLiteRawController {
         const sendCount = queue.prioritySendQueue.length + queue.normalSendQueue.length + queue.backgroundSendQueue.length;
         Logger.debug("[ECHONETLite][queue]", `INF queued for ${ip}, infQueue=${queue.infQueue.length}, sendQueue=${sendCount}`);
         if (queue.processing === false) {
-          // INFの処理
-          this.processQueueForIp(ip); // キュープロセッサ起動
+          this.processQueueForIp(ip);
         }
       }
+
+      // マルチキャストd6応答（GET_RES）→ discoveryQueue
+      if (els.ESV === ELSV.GET_RES && els.SEOJ === "0ef001" && "d6" in els.DETAILs) {
+        queue.discoveryQueue.push({
+          rinfo: rinfo,
+          els: els
+        });
+        Logger.debug("[ECHONETLite][queue]", `GET_RES d6 queued for ${ip}, discoveryQueue=${queue.discoveryQueue.length}`);
+        if (queue.processing === false) {
+          this.processQueueForIp(ip);
+        }
+      }
+
       this.fireReceived(rinfo, els);
     });
 
@@ -347,10 +362,18 @@ export class EchoNetLiteRawController {
     return property;
   }
 
-  private static getProperty = async (ip: string, eoj: string, epc: string): Promise<string | undefined> =>{
+  private async getProperty(ip: string, eoj: string, epc: string): Promise<string | undefined> {
     let res: CommandResponse;
     try {
-      res = await EchoNetCommunicator.execCommandPromise(ip, '0ef001', eoj, ELSV.GET, epc, "");
+      res = await this.execPromise({
+        ip: ip,
+        seoj: '0ef001',
+        deoj: eoj,
+        esv: ELSV.GET,
+        epc: epc,
+        edt: "",
+        tid: ""
+      }, 'priority');
     }
     catch (e) {
       Logger.warn("[ECHONETLite][raw]", `error getProperty: timeout ${ip} ${eoj} ${epc}`, {exception:e});
@@ -367,14 +390,22 @@ export class EchoNetLiteRawController {
   }
 
   // 単一デバイスの詳細情報を収集（内部は直列処理でデバイス保護）
-  private static async collectDeviceDetails(device: RawDevice, nodeIp: string): Promise<void> {
+  private async collectDeviceDetails(device: RawDevice, nodeIp: string): Promise<void> {
     // GET/SET/INFのプロパティマップを受信する（単一デバイスに対しては直列実行）
     for(const epc of ["9f", "9e", "9d"])
     {
       let res: CommandResponse;
       try
       {
-        res = await EchoNetCommunicator.execCommandPromise(nodeIp, "0ef001", device.eoj, ELSV.GET, epc, "", EchoNetLiteRawController.DISCOVERY_TIMEOUT);
+        res = await this.execPromise({
+          ip: nodeIp,
+          seoj: "0ef001",
+          deoj: device.eoj,
+          esv: ELSV.GET,
+          epc: epc,
+          edt: "",
+          tid: ""
+        }, 'priority');
       }
       catch(e)
       {
@@ -449,7 +480,7 @@ export class EchoNetLiteRawController {
     // 取得していないgetプロパティを取得する
     const epcList = device.properties.filter(_ => _.operation.get).filter(_ => _.value === "").map(_ => _.epc);
     for (const epc of epcList) {
-      const value = await EchoNetLiteRawController.getProperty(nodeIp, device.eoj, epc);
+      const value = await this.getProperty(nodeIp, device.eoj, epc);
       if (value === undefined) {
         continue;
       }
@@ -468,7 +499,15 @@ export class EchoNetLiteRawController {
     if (idProperty === undefined) {
       let res: CommandResponse;
       try {
-        res = await EchoNetCommunicator.execCommandPromise(device.ip, '0ef001', device.eoj, ELSV.GET, "83", "", EchoNetLiteRawController.DISCOVERY_TIMEOUT);
+        res = await this.execPromise({
+          ip: device.ip,
+          seoj: '0ef001',
+          deoj: device.eoj,
+          esv: ELSV.GET,
+          epc: "83",
+          edt: "",
+          tid: ""
+        }, 'priority');
       }
       catch (e) {
         device.noExistsId = true;
@@ -504,35 +543,112 @@ export class EchoNetLiteRawController {
     }
   }
 
-  private static async getNewNode(node: RawNode): Promise<RawNode> {
-    const result: RawNode = {
-      ip: node.ip,
-      devices: node.devices.map(_ => ({
-        ip: _.ip,
-        eoj: _.eoj,
-        properties: [],
-        noExistsId: false
-      }))
-    };
+  /**
+   * デバイス詳細収集を非同期で開始（Fire-and-Forget）
+   * INF/d6応答処理後にawaitせずに呼び出すことで、キュー処理をブロックしない
+   */
+  private startDeviceCollection(ip: string): void {
+    // 非同期処理を開始するが、awaitしない（fire-and-forget）
+    this.runDeviceCollection(ip).catch(e => {
+      Logger.error("[ECHONETLite][discovery]", `Device collection failed for ${ip}`, {exception: e});
+    });
+  }
 
-    // IPごとに直列処理（おそらく物理的には一つのIPに対して1コントローラだと思われるので）
-    for (const device of result.devices) {
-      try {
-        await EchoNetLiteRawController.collectDeviceDetails(device, result.ip);
-      } catch (e) {
-        Logger.warn("[ECHONETLite][raw]", `Failed to collect details for device ${device.eoj} on ${result.ip}`, {exception: e});
-        // 1つのデバイスが失敗しても他のデバイスの収集は続行
+  /**
+   * デバイス詳細収集の実処理（非同期、排他制御付き）
+   * プロパティが空のデバイスのみを収集対象とする
+   */
+  private async runDeviceCollection(ip: string): Promise<void> {
+    // Mutexで排他制御
+    const mutex = this.getDeviceCollectionMutex(ip);
+
+    await mutex.runExclusive(async () => {
+      const node = this.nodes.find(n => n.ip === ip);
+      if (!node) {
+        Logger.warn("[ECHONETLite][discovery]", `${ip}: Node not found for collection`);
+        return;
+      }
+
+      // プロパティが空のデバイスのみを収集対象とする（新しいデバイスのみ）
+      const devicesToCollect = node.devices.filter(device => device.properties.length === 0);
+
+      if (devicesToCollect.length === 0) {
+        Logger.debug("[ECHONETLite][discovery]", `${ip}: No devices to collect (all devices already have properties)`);
+        return;
+      }
+
+      Logger.info("[ECHONETLite][discovery]", `${ip}: Starting device collection for ${devicesToCollect.length} devices`);
+
+      // 各デバイスの詳細を収集（ここではawaitを使える）
+      let successCount = 0;
+      for (const device of devicesToCollect) {
+        try {
+          await this.collectDeviceDetails(device, ip);
+          // プロパティが追加されたか確認
+          if (device.properties.length > 0) {
+            successCount++;
+            Logger.debug("[ECHONETLite][discovery]", `${ip}: Collected ${device.properties.length} properties for device ${device.eoj}`);
+          } else {
+            Logger.warn("[ECHONETLite][discovery]", `${ip}: No properties collected for device ${device.eoj}`);
+          }
+        } catch (e) {
+          Logger.warn("[ECHONETLite][discovery]", `${ip}: Failed to collect details for device ${device.eoj}`, {exception: e});
+          // 1つのデバイスが失敗しても他のデバイスの収集は続行
+        }
+      }
+
+      // 収集完了をマーク（全デバイスがプロパティを持っている場合のみ）
+      const allDevicesHaveProperties = node.devices.every(device => device.properties.length > 0);
+      const devicesWithoutProperties = node.devices.filter(device => device.properties.length === 0);
+
+      if (allDevicesHaveProperties) {
+        node.discoveryComplete = true;
+        Logger.info("[ECHONETLite][discovery]", `${ip}: Device collection completed (${successCount}/${devicesToCollect.length} devices), PropertySync enabled`);
+      } else {
+        Logger.warn("[ECHONETLite][discovery]", `${ip}: Device collection incomplete (${successCount}/${devicesToCollect.length} succeeded), ${devicesWithoutProperties.length} devices without properties: ${devicesWithoutProperties.map(d => d.eoj).join(", ")}`);
+      }
+
+      // デバイス詳細が揃ったので、改めてデバイス検出を通知
+      this.fireDeviceDetected(node.ip, node.devices.map(_=>_.eoj));
+    });
+  }
+
+  /**
+   * Discoveryキューを処理し、デバイス探索・登録を行う（コアループのサブルーチン）
+   * d5 (INF), d6 (GET_RES) の両方を処理
+   *
+   * 設計ルール: 同一IP内では直列実行、異なるIP間は並列実行（別のprocessQueueForIp）
+   */
+  private async processDiscoveryQueue(ip: string, queue: ReturnType<typeof this.getOrCreateIpQueue>): Promise<number> {
+    let discoveryProcessed = 0;
+    while (queue.discoveryQueue.length > 0) {
+      const item = queue.discoveryQueue.shift();
+      if (item === undefined) {
+        throw Error("ありえない");
+      }
+      discoveryProcessed++;
+
+      const foundNode = this.nodes.find(_ => _.ip === item.rinfo.address);
+
+      // d5処理（同一IP内では直列）
+      if ("d5" in item.els.DETAILs) {
+        await this.handleD5Notification(item, foundNode);
+      }
+      // d6処理（同一IP内では直列）
+      else if ("d6" in item.els.DETAILs) {
+        await this.handleD6Response(item, foundNode);
       }
     }
 
-    return result;
+    if(discoveryProcessed > 0) {
+      Logger.debug("[ECHONETLite][queue]", `${ip}: Processed ${discoveryProcessed} discovery items`);
+    }
+    return discoveryProcessed;
   }
 
-
-
-
   /**
-   * INFキューを処理し、デバイス検出とプロパティ値更新を行う（コアループのサブルーチン）
+   * INFキューを処理し、プロパティ値更新を行う（コアループのサブルーチン）
+   * d5はdiscoveryQueueで処理されるため、ここでは通常のINFのみを処理
    */
   private async processInfQueue(ip: string, queue: ReturnType<typeof this.getOrCreateIpQueue>): Promise<number> {
     let infProcessed = 0;
@@ -545,16 +661,8 @@ export class EchoNetLiteRawController {
 
       const foundNode = this.nodes.find(_ => _.ip === inf.rinfo.address);
 
-      // 新規ノードまたは既存ノードのd5処理
-      if ("d5" in inf.els.DETAILs) {
-        await this.handleD5Notification(inf, foundNode);
-        if (foundNode === undefined) {
-          continue; // 新規ノードの場合、プロパティ更新はスキップ
-        }
-      }
-
       if (foundNode === undefined) {
-        continue; // d5がない新規ノードは無視
+        continue; // 未登録ノードからのINFは無視
       }
 
       // プロパティ値更新処理
@@ -569,47 +677,96 @@ export class EchoNetLiteRawController {
 
   /**
    * d5(自ノードインスタンスリスト通知)を処理
+   * ノンブロッキング：ノード登録のみ行い、詳細収集は非同期で開始
    */
   private async handleD5Notification(inf: Response, foundNode: RawNode | undefined): Promise<void> {
-    const eojList = EchoNetLiteRawController.convertToInstanceList(inf.els.DETAILs["d5"]);
+    await this.handleNodeInstanceList(inf, foundNode, "d5", "INF d5");
+  }
+
+  /**
+   * d6(自ノードインスタンスリスト)応答を処理（GET_RES）
+   * ノンブロッキング：ノード登録のみ行い、詳細収集は非同期で開始
+   */
+  private async handleD6Response(response: Response, foundNode: RawNode | undefined): Promise<void> {
+    await this.handleNodeInstanceList(response, foundNode, "d6", "GET_RES d6");
+  }
+
+  /**
+   * ノードインスタンスリスト（d5/d6）の共通処理
+   * ノンブロッキング：ノード登録のみ行い、詳細収集は非同期で開始
+   */
+  private async handleNodeInstanceList(
+    response: Response,
+    foundNode: RawNode | undefined,
+    propertyCode: "d5" | "d6",
+    logLabel: string
+  ): Promise<void> {
+    const eojList = EchoNetLiteRawController.convertToInstanceList(response.els.DETAILs[propertyCode]);
 
     // 既存ノードの場合、新しいデバイスがあるかチェック
     if (foundNode !== undefined) {
-      const hasNewDevices = eojList.some(newEoj =>
+      const newEojList = eojList.filter(newEoj =>
         foundNode.devices.find(currentDevice => currentDevice.eoj === newEoj) === undefined
       );
-      if (!hasNewDevices) {
+
+      if (newEojList.length === 0) {
         return; // 新しいデバイスがなければスキップ
       }
-      Logger.debug("[ECHONETLite][queue]", `${inf.rinfo.address}: Processing INF d5 (device update)`);
-    } else {
-      Logger.debug("[ECHONETLite][queue]", `${inf.rinfo.address}: Processing INF d5 (new node discovery)`);
+
+      Logger.info("[ECHONETLite][discovery]", `${response.rinfo.address}: Processing ${logLabel} (device update, ${newEojList.length} new devices)`);
+
+      // 既存ノードに新しいデバイスを追加（既存デバイスは保持）
+      newEojList.forEach(eoj => {
+        foundNode.devices.push({
+          ip: response.rinfo.address,
+          eoj: eoj,
+          properties: [],
+          noExistsId: false
+        });
+      });
+
+      // 新しいデバイスを通知（軽量な状態で）
+      this.fireDeviceDetected(foundNode.ip, foundNode.devices.map(_=>_.eoj));
+
+      // 新しいデバイスのみ収集対象（プロパティが空）
+      this.startDeviceCollection(response.rinfo.address);
+
+      Logger.info("[ECHONETLite][discovery]", `${response.rinfo.address}: New devices added, starting collection for new devices only`);
+      return;
     }
 
-    // ノード構造を作成
+    // 新規ノードの場合
+    Logger.info("[ECHONETLite][discovery]", `${response.rinfo.address}: Processing ${logLabel} (new node discovery)`);
+
+    // ノード構造を軽量に作成（詳細は後で収集）
     const nodeTemp: RawNode = {
-      ip: inf.rinfo.address,
+      ip: response.rinfo.address,
       devices: [{
-        ip: inf.rinfo.address,
+        ip: response.rinfo.address,
         eoj: "0ef001",
         properties: [],
         noExistsId: false
-      }]
+      }],
+      discoveryComplete: false
     };
 
     eojList.forEach(eoj => {
       nodeTemp.devices.push({
-        ip: inf.rinfo.address,
+        ip: response.rinfo.address,
         eoj: eoj,
         properties: [],
         noExistsId: false
       });
     });
 
-    // 排他制御付きでノード詳細を取得
-    const newNode = await this.getNewNodeWithLock(nodeTemp);
-    await this.updateOrAddNode(newNode);
-    this.fireDeviceDetected(newNode.ip, newNode.devices.map(_=>_.eoj));
+    // ノードを登録（軽量、詳細なし）
+    await this.updateOrAddNode(nodeTemp);
+    this.fireDeviceDetected(nodeTemp.ip, nodeTemp.devices.map(_=>_.eoj));
+
+    // デバイス詳細収集を非同期で開始（awaitしない！）
+    this.startDeviceCollection(nodeTemp.ip);
+
+    Logger.info("[ECHONETLite][discovery]", `${response.rinfo.address}: Node registered, starting device collection in background`);
   }
 
   /**
@@ -672,9 +829,9 @@ export class EchoNetLiteRawController {
       // コマンド送信
       const res = await this.sendCommand(command);
 
-      // GET_RESの場合は値を更新
+      // GET_RESの場合は値を更新（d6応答のデバイス探索処理を含む）
       if (res !== undefined) {
-        this.updatePropertiesFromResponse(res);
+        await this.updatePropertiesFromResponse(res);
       }
 
       // 成功/失敗ハンドラを実行
@@ -707,7 +864,8 @@ export class EchoNetLiteRawController {
         command.deoj,
         command.esv,
         command.epc,
-        command.edt);
+        command.edt,
+        undefined); // デフォルトタイムアウトを使用
     } catch(e) {
       Logger.warn("[ECHONETLite][raw]", `error send command: timeout ${command.ip} ${command.seoj} ${command.deoj} ${command.esv} ${command.epc} ${command.edt}`, {exception:e});
       return undefined;
@@ -717,16 +875,24 @@ export class EchoNetLiteRawController {
   /**
    * GET_RESレスポンスからプロパティ値を更新（コアループのサブルーチン）
    */
-  private updatePropertiesFromResponse(res: CommandResponse): void {
-    res.responses.forEach((response):void => {
+  private async updatePropertiesFromResponse(res: CommandResponse): Promise<void> {
+    for (const response of res.responses) {
       if(response.els.ESV !== ELSV.GET_RES) {
-        return;
+        continue;
       }
 
       const ip  = response.rinfo.address;
       const eoj = response.els.SEOJ;
       const els = response.els;
 
+      // d6（自ノードインスタンスリスト）応答の場合、デバイス探索処理
+      if (eoj === "0ef001" && "d6" in els.DETAILs) {
+        const foundNode = this.nodes.find(_ => _.ip === ip);
+        await this.handleD6Response(response, foundNode);
+        continue; // d6処理後は通常のプロパティ更新はスキップ
+      }
+
+      // 通常のプロパティ更新処理
       for(const epc in els.DETAILs) {
         const newValue = els.DETAILs[epc];
         const matchProperty = this.findProperty(ip, eoj, epc);
@@ -745,11 +911,11 @@ export class EchoNetLiteRawController {
           oldValue,
           matchProperty.value);
       }
-    });
+    }
   }
 
   // これがコアループ/キュープロセッサ。get, set, infは全てここを通る（はず）。
-  // ディスカバリ系はこっちを通らないので注意。(ただしd5 = 自ノードインスタンスリスト通知はここを通る)
+  // デバイス探索の要求送信は直接送信だが、応答（d6 GET_RES、d5 INF）はここを通る。
   // デバイス（IP）ごとに単一のキューを使って処理を直列化している。これにより、同一デバイスに対しては並列リクエストが発生しないように制御している。
   // 一方、このキューはデバイスごとに存在するため、異なるデバイスに対しては並列にリクエストが発生する。
   private processQueueForIp = async (ip: string):Promise<void> =>{
@@ -762,27 +928,29 @@ export class EchoNetLiteRawController {
     queue.processing = true;
 
     const startTime = Date.now();
+    const initialDiscoveryCount = queue.discoveryQueue.length;
     const initialInfCount = queue.infQueue.length;
     const initialSendCount = queue.prioritySendQueue.length + queue.normalSendQueue.length + queue.backgroundSendQueue.length;
-    Logger.debug("[ECHONETLite][queue]", `${ip}: Start processing (inf=${initialInfCount}, send=${initialSendCount} [p=${queue.prioritySendQueue.length}, n=${queue.normalSendQueue.length}, b=${queue.backgroundSendQueue.length}])`);
+    Logger.debug("[ECHONETLite][queue]", `${ip}: Start processing (discovery=${initialDiscoveryCount}, inf=${initialInfCount}, send=${initialSendCount} [p=${queue.prioritySendQueue.length}, n=${queue.normalSendQueue.length}, b=${queue.backgroundSendQueue.length}])`);
 
     try {
+      await this.processDiscoveryQueue(ip, queue);
       await this.processInfQueue(ip, queue);
       await this.processSendQueue(ip, queue);
     }
     finally {
       const elapsed = Date.now() - startTime;
       const remainingSendCount = queue.prioritySendQueue.length + queue.normalSendQueue.length + queue.backgroundSendQueue.length;
-      Logger.debug("[ECHONETLite][queue]", `${ip}: Finished processing in ${elapsed}ms (remaining: inf=${queue.infQueue.length}, send=${remainingSendCount})`);
+      Logger.debug("[ECHONETLite][queue]", `${ip}: Finished processing in ${elapsed}ms (remaining: discovery=${queue.discoveryQueue.length}, inf=${queue.infQueue.length}, send=${remainingSendCount})`);
     }
 
     // 処理完了: 必ずprocessingフラグをリセット
     queue.processing = false;
 
     const totalSendCount = queue.prioritySendQueue.length + queue.normalSendQueue.length + queue.backgroundSendQueue.length;
-    if (queue.infQueue.length > 0 || totalSendCount > 0) {
+    if (queue.discoveryQueue.length > 0 || queue.infQueue.length > 0 || totalSendCount > 0) {
       // キューにまだアイテムがあればすぐに次の処理をスケジュール
-      Logger.debug("[ECHONETLite][queue]", `${ip}: More items in queue (inf=${queue.infQueue.length}, send=${totalSendCount}), scheduling next processing`);
+      Logger.debug("[ECHONETLite][queue]", `${ip}: More items in queue (discovery=${queue.discoveryQueue.length}, inf=${queue.infQueue.length}, send=${totalSendCount}), scheduling next processing`);
       setTimeout(() => this.processQueueForIp(ip), 1);
     }
     // なければ一度終了し、次に処理を必要とするメソッドが呼ばれたときに起動される。
@@ -795,144 +963,18 @@ export class EchoNetLiteRawController {
       commandTimeout);
   }
 
-  public searchDeviceFromIp = async (ip:string):Promise<void> =>
-  {
-    const startTime = Date.now();
-    Logger.debug("[ECHONETLite][discovery]", `Starting device discovery for ${ip}`);
-
-    let res: CommandResponse;
-    try {
-      res = await EchoNetCommunicator.execCommandPromise(ip, '0ef001', '0ef001', ELSV.GET, "d6", "", EchoNetLiteRawController.DISCOVERY_TIMEOUT);
-    }
-    catch (e) {
-      Logger.warn("[ECHONETLite][discovery]", `Discovery failed for ${ip}: timeout`, {exception:e});
-      return undefined;
-    }
-    const response = res.matchResponse(_=>_.els.ESV === ELSV.GET_RES && ("d6" in _.els.DETAILs));
-    if(response === undefined)
-    {
-      Logger.warn("[ECHONETLite][discovery]", `Discovery failed for ${ip}: no valid response`, {responses:res.responses, command:res.command});
-      return;
-    }
-
-    const node: RawNode = {
-      ip: response.rinfo.address,
-      devices: [
-        {
-          ip: response.rinfo.address,
-          eoj: "0ef001",
-          properties: [],
-          noExistsId: false
-        }
-      ]
-    };
-    const deviceCount = EchoNetLiteRawController.convertToInstanceList(response.els.DETAILs["d6"]).length;
-    EchoNetLiteRawController.convertToInstanceList(response.els.DETAILs["d6"]).forEach(eoj => {
-      node.devices.push({
-        ip: response.rinfo.address,
-        eoj: eoj,
-        properties: [],
-        noExistsId: false
-      });
-    });
-
-    Logger.debug("[ECHONETLite][discovery]", `Found ${deviceCount} devices on ${ip}, fetching details`);
-
-    // ノードの詳細を取得する（排他制御付き）
-    const newNode = await this.getNewNodeWithLock(node);
-    await this.updateOrAddNode(newNode);
-    this.fireDeviceDetected(newNode.ip, newNode.devices.map(_=>_.eoj));
-
-    const elapsed = Date.now() - startTime;
-    Logger.info("[ECHONETLite][discovery]", `Device discovery for ${ip} completed in ${elapsed}ms (${deviceCount} devices)`);
+  public searchDeviceFromIp = (ip: string): void => {
+    // ユニキャスト送信のみ（ノンブロッキング）
+    // d6応答はGET_RESとしてキュー経由で処理される
+    Logger.info("[ECHONETLite][discovery]", `Sending unicast discovery request to ${ip} (non-blocking)`);
+    EchoNetCommunicator.sendNow(ip, '0ef001', '0ef001', ELSV.GET, "d6", "");
   }
 
-  public searchDevicesInNetwork = async (): Promise<void> =>{
-
-    // ネットワーク内のすべてのノードからd6(自ノードインスタンスリスト)を取得する
-    const res = await EchoNetCommunicator.getForTimeoutPromise(
-      '224.0.23.0',
-      '0ef001',
-      '0ef001',
-      ELSV.GET,
-      "d6",
-      "",
-      5000);
-
-    Logger.info("[ECHONETLite][discovery]", `Received ${res.responses.length} responses from multicast`);
-
-    // 取得結果から、ノードを作成する
-    var nodesTemp = res.responses.map((response): RawNode|undefined => {
-      if(response.els.ESV !== ELSV.GET_RES)
-      {
-        return undefined;
-      }
-      const result: RawNode = {
-        ip: response.rinfo.address,
-        devices: [
-          {
-            ip: response.rinfo.address,
-            eoj: "0ef001",
-            properties: [],
-            noExistsId: false
-          }
-        ]
-      };
-
-      if ("d6" in response.els.DETAILs) {
-        EchoNetLiteRawController.convertToInstanceList(response.els.DETAILs["d6"]).forEach(eoj => {
-          result.devices.push({
-            ip: response.rinfo.address,
-            eoj: eoj,
-            properties: [],
-            noExistsId: false
-          });
-        });
-      }
-      return result;
-    }).filter(_=>_!==undefined);
-
-    // ノードの詳細を取得する（ノード間は並列処理）
-    const startTime = Date.now();
-    const nodeIps = nodesTemp.map(n => n?.ip).join(", ");
-    Logger.info("[ECHONETLite][discovery]", `Starting parallel node discovery for ${nodesTemp.length} nodes: [${nodeIps}]`);
-
-    const newNodesResults = await Promise.allSettled(
-      nodesTemp.map(async (node) => {
-        if(node === undefined) {
-          throw Error("ありえない");
-        }
-        const nodeStartTime = Date.now();
-        Logger.debug("[ECHONETLite][discovery]", `Starting node detail collection for ${node.ip}`);
-
-        // 排他制御付きでノード詳細を取得
-        const newNode = await this.getNewNodeWithLock(node);
-
-        const nodeElapsed = Date.now() - nodeStartTime;
-        const deviceCount = newNode.devices.length;
-        Logger.info("[ECHONETLite][discovery]", `Node detail collection for ${node.ip} completed in ${nodeElapsed}ms (${deviceCount} devices)`);
-
-        return newNode;
-      })
-    );
-
-    // 結果を処理（こちらは順次処理で排他制御）
-    let successCount = 0;
-    let failCount = 0;
-    for (const result of newNodesResults) {
-      if (result.status === "fulfilled") {
-        const newNode = result.value;
-        await this.updateOrAddNode(newNode);
-        this.fireDeviceDetected(newNode.ip, newNode.devices.map(_=>_.eoj));
-        successCount++;
-      } else {
-        failCount++;
-        Logger.warn("[ECHONETLite][discovery]", `Node discovery failed: ${result.reason}`);
-      }
-    }
-
-    const totalElapsed = Date.now() - startTime;
-    Logger.info("[ECHONETLite][discovery]", `Network discovery completed in ${totalElapsed}ms (success=${successCount}, failed=${failCount})`);
+  public searchDevicesInNetwork = (): void => {
+    // マルチキャスト送信のみ（ノンブロッキング）
+    // d6応答はGET_RESとしてキュー経由で処理される
+    Logger.info("[ECHONETLite][discovery]", "Sending multicast discovery request (non-blocking)");
+    EchoNetCommunicator.sendNow('224.0.23.0', '0ef001', '0ef001', ELSV.GET, "d6", "");
   }
 
   private deviceDetectedListeners:((ip:string, eojList:string[])=>void)[] = [];
@@ -1100,6 +1142,7 @@ export interface RawNode
 {
   ip:string;
   devices:RawDevice[];
+  discoveryComplete:boolean; // true: デバイス探索完了、PropertySync対象
 }
 interface RawDevice
 {

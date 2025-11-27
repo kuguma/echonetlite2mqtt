@@ -44,6 +44,7 @@ export class PropertySyncManager {
   private deviceStore?: DeviceStore;
   private requestDevicePropertyFn?: (id: {id:string, ip:string, eoj:string, internalId:string}, propertyName: string, options?: any) => Promise<void>;
   private readonly syncMutex = new Mutex();
+  private rawController?: any; // デバイス探索完了チェック用
 
   constructor() {
   }
@@ -65,11 +66,21 @@ export class PropertySyncManager {
   /**
    * 指定IPのデバイスプロパティをチェックし、更新が必要なリクエストを返す
    */
-  public checkAndRequestUpdates(ip: string, deviceStore: DeviceStore): UpdateRequest[] {
+  public checkAndRequestUpdates(ip: string, deviceStore: DeviceStore, rawController?: any): UpdateRequest[] {
     if (!this.config) return [];
 
     const devices = deviceStore.getAll().filter(d => d.ip === ip);
     if (devices.length === 0) return [];
+
+    // 探索完了チェック：rawControllerが渡され、かつ該当IPのノードがdiscoveryComplete=falseの場合はスキップ
+    if (rawController) {
+      const nodes = rawController.getAllNodes() as Array<{ip: string; discoveryComplete: boolean}>;
+      const node = nodes.find(n => n.ip === ip);
+      if (node && !node.discoveryComplete) {
+        Logger.debug("[PropertySync]", `${ip}: Skipped (discovery not completed yet)`);
+        return [];
+      }
+    }
 
     const now = Date.now();
     const requests: UpdateRequest[] = [];
@@ -273,10 +284,12 @@ export class PropertySyncManager {
    */
   public startSync(
     deviceStore: DeviceStore,
-    requestDevicePropertyFn: (id: {id:string, ip:string, eoj:string, internalId:string}, propertyName: string, options?: any) => Promise<void>
+    requestDevicePropertyFn: (id: {id:string, ip:string, eoj:string, internalId:string}, propertyName: string, options?: any) => Promise<void>,
+    rawController?: any
   ): void {
     this.deviceStore = deviceStore;
     this.requestDevicePropertyFn = requestDevicePropertyFn;
+    this.rawController = rawController;
 
     if (this.timerHandle) {
       Logger.warn("[PropertySync]", "Sync already started");
@@ -379,7 +392,7 @@ export class PropertySyncManager {
       // 重複排除により実際のデバイス負荷は制御される
       // promiseは遅いデバイスが速いデバイスをブロックして次のループがまとめて遅延しまうため採用できない
       devicesByIp.forEach((devices, ip) => {
-        const updateRequests = this.checkAndRequestUpdates(ip, deviceStore);
+        const updateRequests = this.checkAndRequestUpdates(ip, deviceStore, this.rawController);
 
         if (updateRequests.length > 0) {
           Logger.debug("[PropertySync]", `${ip}: Launching ${updateRequests.length} property sync requests (fire-and-forget)`);
