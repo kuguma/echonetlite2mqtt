@@ -392,7 +392,9 @@ export class EchoNetLiteController{
     await this.echonetLiteRawController.initialize(
       Object.keys(this.controllerDeviceDefine),
       this.usedIpByEchoNet,
-      this.commandTimeout
+      this.commandTimeout,
+      this.knownDeviceIpList,
+      this.searchDevices
     );
 
     this.controllerDeviceDefine['05ff01']['83'] = this.echonetLiteRawController.updateidentifierFromMacAddress(this.controllerDeviceDefine['05ff01']['83']);
@@ -400,18 +402,7 @@ export class EchoNetLiteController{
     await (new Promise<void>((resolve)=>setTimeout(()=>resolve(), 1000)));
 
     // デバイス探索（ノンブロッキング：要求を送信するのみ、応答はキュー経由で処理される）
-    if(this.knownDeviceIpList.length > 0)
-    {
-      Logger.info("[ECHONETLite]", `sending discovery requests to ${this.knownDeviceIpList.length} known IPs`);
-      this.knownDeviceIpList.forEach(ip =>
-        this.echonetLiteRawController.searchDeviceFromIp(ip)
-      );
-    }
-    if(this.searchDevices)
-    {
-      Logger.info("[ECHONETLite]", `sending multicast discovery request`);
-      this.echonetLiteRawController.searchDevicesInNetwork();
-    }
+    this.echonetLiteRawController.executeDeviceSearch();
   }
 
 

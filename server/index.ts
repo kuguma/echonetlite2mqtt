@@ -61,6 +61,7 @@ interface InputParameters{
   echonetDisableAutoDeviceDiscovery:boolean;
   echonetCommandTimeout:number;
   echonetPropertySyncConfigFile:string;
+  echonetPeriodicDiscoveryInterval:number;
   debugLog:boolean;
   restApiPort:number;
   restApiHost:string;
@@ -87,6 +88,7 @@ let echonetCommandTimeout = 3000;
 let echonetPropertyRequestRetryCount = 1;
 let echonetPropertyRequestRetryDelay = 0;
 let echonetPropertySyncConfigFile = "";
+let echonetPeriodicDiscoveryInterval = 0;
 let debugLog = false;
 let restApiPort = 3000;
 let restApiHost = "0.0.0.0";
@@ -144,10 +146,10 @@ if( "ECHONET_DISABLE_AUTO_DEVICE_DISCOVERY" in process.env &&
   }
 }
 
-if( "ECHONET_COMMAND_TIMEOUT" in process.env &&
-  process.env.ECHONET_COMMAND_TIMEOUT !== undefined)
+if( "ECHONET_COMMAND_TIMEOUT_MS" in process.env &&
+  process.env.ECHONET_COMMAND_TIMEOUT_MS !== undefined)
 {
-  const temp = process.env.ECHONET_COMMAND_TIMEOUT.replace(/^"/g, "").replace(/"$/g, "");
+  const temp = process.env.ECHONET_COMMAND_TIMEOUT_MS.replace(/^"/g, "").replace(/"$/g, "");
   const tempNo = Number(temp);
   if(isNaN(tempNo)===false)
   {
@@ -182,6 +184,17 @@ if (
   process.env.ECHONET_PROPERTY_SYNC_CONFIG_FILE !== undefined
 ) {
   echonetPropertySyncConfigFile = process.env.ECHONET_PROPERTY_SYNC_CONFIG_FILE.replace(/^"/g, "").replace(/"$/g, "");
+}
+
+if( "ECHONET_PERIODIC_DISCOVERY_INTERVAL_SEC" in process.env &&
+  process.env.ECHONET_PERIODIC_DISCOVERY_INTERVAL_SEC !== undefined)
+{
+  const temp = process.env.ECHONET_PERIODIC_DISCOVERY_INTERVAL_SEC.replace(/^"/g, "").replace(/"$/g, "");
+  const tempNo = Number(temp);
+  if(isNaN(tempNo)===false && tempNo >= 0)
+  {
+    echonetPeriodicDiscoveryInterval = tempNo;
+  }
 }
 
 if ("DEBUG" in process.env && process.env.DEBUG !== undefined) {
@@ -298,7 +311,7 @@ for(var i = 2;i < process.argv.length; i++){
       echonetDisableAutoDeviceDiscovery = true;
     }
   }
-  if(name === "--echonetCommandTimeout".toLowerCase())
+  if(name === "--echonetCommandTimeoutMs".toLowerCase())
   {
     const tempNo = Number(value.replace(/^"/g, "").replace(/"$/g, ""));
     if(value!=="" && isNaN(tempNo)===false)
@@ -309,6 +322,14 @@ for(var i = 2;i < process.argv.length; i++){
   if(name === "--echonetPropertySyncConfigFile".toLowerCase())
   {
     echonetPropertySyncConfigFile = value.replace(/^"/g, "").replace(/"$/g, "");
+  }
+  if(name === "--echonetPeriodicDiscoveryIntervalSec".toLowerCase())
+  {
+    const tempNo = Number(value.replace(/^"/g, "").replace(/"$/g, ""));
+    if(value!=="" && isNaN(tempNo)===false && tempNo >= 0)
+    {
+      echonetPeriodicDiscoveryInterval = tempNo;
+    }
   }
   if(name === "--RestApiPort".toLowerCase())
   {
@@ -412,6 +433,7 @@ logger.output(`echonetCommandTimeout=${echonetCommandTimeout}`);
 logger.output(`echonetPropertyRequestRetryCount=${echonetPropertyRequestRetryCount}`);
 logger.output(`echonetPropertyRequestRetryDelay=${echonetPropertyRequestRetryDelay}`);
 logger.output(`echonetPropertySyncConfigFile=${echonetPropertySyncConfigFile}`);
+logger.output(`echonetPeriodicDiscoveryInterval=${echonetPeriodicDiscoveryInterval}`);
 logger.output(`debugLog=${debugLog}`);
 logger.output(`restApiPort=${restApiPort}`);
 logger.output(`restApiHost=${restApiHost}`);
@@ -437,6 +459,7 @@ const inputParameters:InputParameters =
   echonetDisableAutoDeviceDiscovery,
   echonetCommandTimeout,
   echonetPropertySyncConfigFile,
+  echonetPeriodicDiscoveryInterval,
   debugLog,
   restApiPort,
   restApiHost,
@@ -765,7 +788,7 @@ restApiController.addPropertyRequestedRequestEvent(async (deviceId:string, prope
   }
 
   const deviceNameText = device.name.padEnd(41, " ");
-  logger.output(`[RESTAPI]     prop reuqest: ${deviceNameText} ${propertyName}`);
+  logger.output(`[RESTAPI]     prop request: ${deviceNameText} ${propertyName}`);
   eventRepository.newEvent(`LOG`);
 
   // 非ブロッキング: 待機せずにリクエストをキューに追加
@@ -809,7 +832,7 @@ mqttController.addPropertyRequestedEvent(async (deviceId:string, propertyName:st
   }
 
   const deviceNameText = device.name.padEnd(41, " ");
-  logger.output(`[MQTT]        prop reuqest: ${deviceNameText} ${propertyName}`);
+  logger.output(`[MQTT]        prop request: ${deviceNameText} ${propertyName}`);
   eventRepository.newEvent(`LOG`);
 
   // 非ブロッキング: 待機せずにリクエストをキューに追加
@@ -861,5 +884,16 @@ echoNetListController.start().then(() => {
   else
   {
     Logger.info("[PropertySync]", "PropertySync disabled (no config file specified)");
+  }
+
+  // 定期探索機能の開始
+  if(echonetPeriodicDiscoveryInterval > 0)
+  {
+    echoNetListController.getRawController().setPeriodicDiscoveryInterval(echonetPeriodicDiscoveryInterval);
+    Logger.info("[PeriodicDiscovery]", `Periodic device discovery enabled (interval: ${echonetPeriodicDiscoveryInterval}s)`);
+  }
+  else
+  {
+    Logger.info("[PeriodicDiscovery]", "Periodic device discovery disabled");
   }
 });
