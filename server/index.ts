@@ -788,7 +788,7 @@ restApiController.addPropertyRequestedRequestEvent(async (deviceId:string, prope
   }
 
   const deviceNameText = device.name.padEnd(41, " ");
-  logger.output(`[RESTAPI]     prop reuqest: ${deviceNameText} ${propertyName}`);
+  logger.output(`[RESTAPI]     prop request: ${deviceNameText} ${propertyName}`);
   eventRepository.newEvent(`LOG`);
 
   // 非ブロッキング: 待機せずにリクエストをキューに追加
@@ -832,7 +832,7 @@ mqttController.addPropertyRequestedEvent(async (deviceId:string, propertyName:st
   }
 
   const deviceNameText = device.name.padEnd(41, " ");
-  logger.output(`[MQTT]        prop reuqest: ${deviceNameText} ${propertyName}`);
+  logger.output(`[MQTT]        prop request: ${deviceNameText} ${propertyName}`);
   eventRepository.newEvent(`LOG`);
 
   // 非ブロッキング: 待機せずにリクエストをキューに追加
