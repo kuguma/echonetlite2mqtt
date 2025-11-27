@@ -1050,9 +1050,6 @@ export class EchoNetLiteRawController {
     const intervalMs = this.periodicDiscoveryIntervalSec * 1000;
     Logger.info("[ECHONETLite][periodic-discovery]", `Starting periodic device discovery (interval: ${this.periodicDiscoveryIntervalSec}s)`);
 
-    // 即座に1回実行
-    this.executeDeviceSearch();
-
     // 定期実行を開始
     this.periodicDiscoveryTimer = setInterval(() => {
       this.executeDeviceSearch();
