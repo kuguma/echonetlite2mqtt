@@ -146,10 +146,10 @@ if( "ECHONET_DISABLE_AUTO_DEVICE_DISCOVERY" in process.env &&
   }
 }
 
-if( "ECHONET_COMMAND_TIMEOUT" in process.env &&
-  process.env.ECHONET_COMMAND_TIMEOUT !== undefined)
+if( "ECHONET_COMMAND_TIMEOUT_MS" in process.env &&
+  process.env.ECHONET_COMMAND_TIMEOUT_MS !== undefined)
 {
-  const temp = process.env.ECHONET_COMMAND_TIMEOUT.replace(/^"/g, "").replace(/"$/g, "");
+  const temp = process.env.ECHONET_COMMAND_TIMEOUT_MS.replace(/^"/g, "").replace(/"$/g, "");
   const tempNo = Number(temp);
   if(isNaN(tempNo)===false)
   {
@@ -186,10 +186,10 @@ if (
   echonetPropertySyncConfigFile = process.env.ECHONET_PROPERTY_SYNC_CONFIG_FILE.replace(/^"/g, "").replace(/"$/g, "");
 }
 
-if( "ECHONET_PERIODIC_DISCOVERY_INTERVAL" in process.env &&
-  process.env.ECHONET_PERIODIC_DISCOVERY_INTERVAL !== undefined)
+if( "ECHONET_PERIODIC_DISCOVERY_INTERVAL_SEC" in process.env &&
+  process.env.ECHONET_PERIODIC_DISCOVERY_INTERVAL_SEC !== undefined)
 {
-  const temp = process.env.ECHONET_PERIODIC_DISCOVERY_INTERVAL.replace(/^"/g, "").replace(/"$/g, "");
+  const temp = process.env.ECHONET_PERIODIC_DISCOVERY_INTERVAL_SEC.replace(/^"/g, "").replace(/"$/g, "");
   const tempNo = Number(temp);
   if(isNaN(tempNo)===false && tempNo >= 0)
   {
@@ -311,7 +311,7 @@ for(var i = 2;i < process.argv.length; i++){
       echonetDisableAutoDeviceDiscovery = true;
     }
   }
-  if(name === "--echonetCommandTimeout".toLowerCase())
+  if(name === "--echonetCommandTimeoutMs".toLowerCase())
   {
     const tempNo = Number(value.replace(/^"/g, "").replace(/"$/g, ""));
     if(value!=="" && isNaN(tempNo)===false)
@@ -323,7 +323,7 @@ for(var i = 2;i < process.argv.length; i++){
   {
     echonetPropertySyncConfigFile = value.replace(/^"/g, "").replace(/"$/g, "");
   }
-  if(name === "--echonetPeriodicDiscoveryInterval".toLowerCase())
+  if(name === "--echonetPeriodicDiscoveryIntervalSec".toLowerCase())
   {
     const tempNo = Number(value.replace(/^"/g, "").replace(/"$/g, ""));
     if(value!=="" && isNaN(tempNo)===false && tempNo >= 0)
