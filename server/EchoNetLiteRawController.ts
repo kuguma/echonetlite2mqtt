@@ -27,8 +27,8 @@ export class EchoNetLiteRawController {
   private enableMulticastSearch: boolean = false;
 
   // 定期探索機能
-  private periodicSearchIntervalSec?: number;
-  private periodicSearchTimer?: NodeJS.Timeout;
+  private periodicDiscoveryIntervalSec?: number;
+  private periodicDiscoveryTimer?: NodeJS.Timeout;
 
   // IP別のキュー構造
   private readonly ipQueues: Map<string, {
@@ -1023,38 +1023,38 @@ export class EchoNetLiteRawController {
    * 定期探索の間隔を設定し、機能を有効化/無効化する
    * @param intervalSec 探索間隔（秒）。undefinedの場合は機能を無効化
    */
-  public setPeriodicSearchInterval(intervalSec?: number): void {
-    this.periodicSearchIntervalSec = intervalSec;
+  public setPeriodicDiscoveryInterval(intervalSec?: number): void {
+    this.periodicDiscoveryIntervalSec = intervalSec;
 
     if (intervalSec !== undefined && intervalSec > 0) {
-      this.startPeriodicSearch();
+      this.startPeriodicDiscovery();
     } else {
-      this.stopPeriodicSearch();
+      this.stopPeriodicDiscovery();
     }
   }
 
   /**
    * 定期探索を開始する
    */
-  private startPeriodicSearch(): void {
-    if (this.periodicSearchTimer) {
-      Logger.warn("[ECHONETLite][periodic-search]", "Periodic search already running");
+  private startPeriodicDiscovery(): void {
+    if (this.periodicDiscoveryTimer) {
+      Logger.warn("[ECHONETLite][periodic-discovery]", "Periodic discovery already running");
       return;
     }
 
-    if (!this.periodicSearchIntervalSec || this.periodicSearchIntervalSec <= 0) {
-      Logger.warn("[ECHONETLite][periodic-search]", "Invalid interval, periodic search not started");
+    if (!this.periodicDiscoveryIntervalSec || this.periodicDiscoveryIntervalSec <= 0) {
+      Logger.warn("[ECHONETLite][periodic-discovery]", "Invalid interval, periodic discovery not started");
       return;
     }
 
-    const intervalMs = this.periodicSearchIntervalSec * 1000;
-    Logger.info("[ECHONETLite][periodic-search]", `Starting periodic device search (interval: ${this.periodicSearchIntervalSec}s)`);
+    const intervalMs = this.periodicDiscoveryIntervalSec * 1000;
+    Logger.info("[ECHONETLite][periodic-discovery]", `Starting periodic device discovery (interval: ${this.periodicDiscoveryIntervalSec}s)`);
 
     // 即座に1回実行
     this.executeDeviceSearch();
 
     // 定期実行を開始
-    this.periodicSearchTimer = setInterval(() => {
+    this.periodicDiscoveryTimer = setInterval(() => {
       this.executeDeviceSearch();
     }, intervalMs);
   }
@@ -1062,11 +1062,11 @@ export class EchoNetLiteRawController {
   /**
    * 定期探索を停止する
    */
-  private stopPeriodicSearch(): void {
-    if (this.periodicSearchTimer) {
-      clearInterval(this.periodicSearchTimer);
-      this.periodicSearchTimer = undefined;
-      Logger.info("[ECHONETLite][periodic-search]", "Periodic device search stopped");
+  private stopPeriodicDiscovery(): void {
+    if (this.periodicDiscoveryTimer) {
+      clearInterval(this.periodicDiscoveryTimer);
+      this.periodicDiscoveryTimer = undefined;
+      Logger.info("[ECHONETLite][periodic-discovery]", "Periodic device discovery stopped");
     }
   }
 
