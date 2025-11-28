@@ -1,4 +1,4 @@
-import { AliasOption, Device, DeviceAlias, DeviceId, Manufacturer, Property, PropertyValue, Protocol } from "./Property";
+import { FriendlyNameOption, Device, DeviceFriendlyName, DeviceId, Manufacturer, Property, PropertyValue, Protocol } from "./Property";
 import { EchoNetPropertyConverter } from "./EchoNetPropertyConverter";
 import { getUtcNowDateTimeText } from "./datetimeLib";
 import { RawDataSet } from "./EchoNetCommunicator";
@@ -8,11 +8,11 @@ export default class EchoNetDeviceConverter
 {
   private echoNetPropertyConverter:EchoNetPropertyConverter = new EchoNetPropertyConverter();
 
-  private readonly aliasOption:AliasOption;
+  private readonly friendlyNameOption:FriendlyNameOption;
   private readonly unknownAsError:boolean;
-  public constructor(aliasOption:AliasOption, unknownAsError:boolean)
+  public constructor(friendlyNameOption:FriendlyNameOption, unknownAsError:boolean)
   {
-    this.aliasOption = aliasOption;
+    this.friendlyNameOption = friendlyNameOption;
     this.unknownAsError = unknownAsError;
   }
 
@@ -205,10 +205,10 @@ export default class EchoNetDeviceConverter
     }
 
     let name = id;
-    const matchedAliases = this.aliasOption.aliases.filter(_=>DeviceAlias.isMatch(_, id, eoj, ip));
-    if(matchedAliases.length > 0)
+    const matchedFriendlyNames = this.friendlyNameOption.friendlyNames.filter(_=>DeviceFriendlyName.isMatch(_, id, eoj, ip));
+    if(matchedFriendlyNames.length > 0)
     {
-      name = matchedAliases[0].name;
+      name = matchedFriendlyNames[0].name;
     }
 
     return {

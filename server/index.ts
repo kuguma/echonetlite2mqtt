@@ -1,4 +1,4 @@
-import { AliasOption, Device, DeviceId } from "./Property";
+import { FriendlyNameOption, Device, DeviceId } from "./Property";
 import { HoldOption, MqttController } from "./MqttController";
 import { DeviceStore } from "./DeviceStore";
 import { EchoNetLiteController } from "./EchoNetLiteController";
@@ -56,7 +56,7 @@ function isIpInCidr(testIp: string, cidr: string): boolean {
 
 interface InputParameters{
   echonetTargetNetwork:string;
-  echonetAliasFile:string;
+  echonetFriendlyNameFile:string;
   echonetUnknownAsError:boolean;
   echonetDeviceIpList:string;
   echonetDisableAutoDeviceDiscovery:boolean;
@@ -81,7 +81,7 @@ interface InputParameters{
 };
 
 let echonetTargetNetwork = "";
-let echonetAliasFile="";
+let echonetFriendlyNameFile="";
 let echonetUnknownAsError = false;
 let echonetDeviceIpList = "";
 let echonetDisableAutoDeviceDiscovery = false;
@@ -112,10 +112,10 @@ if (
   echonetTargetNetwork = process.env.ECHONET_TARGET_NETWORK.replace(/^"/g, "").replace(/"$/g, "");
 }
 if (
-  "ECHONET_ALIAS_FILE" in process.env &&
-  process.env.ECHONET_ALIAS_FILE !== undefined
+  "ECHONET_FRIENDLY_NAME_FILE" in process.env &&
+  process.env.ECHONET_FRIENDLY_NAME_FILE !== undefined
 ) {
-  echonetAliasFile = process.env.ECHONET_ALIAS_FILE.replace(/^"/g, "").replace(/"$/g, "");
+  echonetFriendlyNameFile = process.env.ECHONET_FRIENDLY_NAME_FILE.replace(/^"/g, "").replace(/"$/g, "");
 }
 
 if( "ECHONET_UNKNOWN_AS_ERROR" in process.env && process.env.ECHONET_UNKNOWN_AS_ERROR !== undefined)
@@ -290,9 +290,9 @@ for(var i = 2;i < process.argv.length; i++){
   {
     echonetTargetNetwork = value.replace(/^"/g, "").replace(/"$/g, "");
   }
-  if(name === "--echonetAliasFile".toLowerCase())
+  if(name === "--echonetFriendlyNameFile".toLowerCase())
   {
-    echonetAliasFile = value.replace(/^"/g, "").replace(/"$/g, "");
+    echonetFriendlyNameFile = value.replace(/^"/g, "").replace(/"$/g, "");
   }
   if(name === "--echonetUnknownAsError".toLowerCase())
   {
@@ -426,7 +426,7 @@ if(fs.existsSync(path.resolve(__dirname, "../buildinfo")))
 Logger.info("", "");
 
 logger.output(`echonetTargetNetwork=${echonetTargetNetwork}`);
-logger.output(`echonetAliasFile=${echonetAliasFile}`);
+logger.output(`echonetFriendlyNameFile=${echonetFriendlyNameFile}`);
 logger.output(`echonetUnknownAsError=${echonetUnknownAsError}`);
 logger.output(`echonetDeviceIpList=${echonetDeviceIpList}`);
 logger.output(`echonetDisableAutoDeviceDiscovery=${echonetDisableAutoDeviceDiscovery}`);
@@ -454,7 +454,7 @@ logger.output(``);
 const inputParameters:InputParameters =
 {
   echonetTargetNetwork,
-  echonetAliasFile,
+  echonetFriendlyNameFile,
   echonetUnknownAsError,
   echonetDeviceIpList,
   echonetDisableAutoDeviceDiscovery,
@@ -521,39 +521,39 @@ if(mqttClientId !== "")
   mqttOption.clientId = mqttClientId;
 }
 
-const aliasOption: AliasOption = AliasOption.empty;
+const friendlyNameOption: FriendlyNameOption = FriendlyNameOption.empty;
 
-if(echonetAliasFile!=="")
+if(echonetFriendlyNameFile!=="")
 {
-  if(fs.existsSync(echonetAliasFile)===false)
+  if(fs.existsSync(echonetFriendlyNameFile)===false)
   {
-    logger.output(`[ERROR] echonetAliasFile is not found. : ${echonetAliasFile}`);
+    logger.output(`[ERROR] echonetFriendlyNameFile is not found. : ${echonetFriendlyNameFile}`);
   }
   else
   {
-    const aliasContent = fs.readFileSync(echonetAliasFile, {encoding:"utf8"});
-    let aliasOptionTemp:AliasOption|undefined = undefined;
+    const friendlyNameContent = fs.readFileSync(echonetFriendlyNameFile, {encoding:"utf8"});
+    let friendlyNameOptionTemp:FriendlyNameOption|undefined = undefined;
     try
     {
-      aliasOptionTemp = JSON.parse(aliasContent) as AliasOption;
+      friendlyNameOptionTemp = JSON.parse(friendlyNameContent) as FriendlyNameOption;
     }
     catch(e)
     {
-      logger.output(`[ERROR] echonetAliasFile is not a json file. : ${echonetAliasFile}`);
+      logger.output(`[ERROR] echonetFriendlyNameFile is not a json file. : ${echonetFriendlyNameFile}`);
     }
-    if(aliasOptionTemp !== undefined)
+    if(friendlyNameOptionTemp !== undefined)
     {
-      const validationResult = AliasOption.validate(aliasOptionTemp);
+      const validationResult = FriendlyNameOption.validate(friendlyNameOptionTemp);
       if(validationResult.valid === false)
       {
-        
-        logger.output(`[ERROR] echonetAliasFile is unexpected format. : ${echonetAliasFile}
+
+        logger.output(`[ERROR] echonetFriendlyNameFile is unexpected format. : ${echonetFriendlyNameFile}
 error details:
 ${validationResult.message}`);
       }
       else
       {
-        aliasOption.aliases = aliasOptionTemp.aliases;
+        friendlyNameOption.friendlyNames = friendlyNameOptionTemp.friendlyNames;
       }
     }
   }
@@ -689,7 +689,7 @@ const deviceStore = new DeviceStore();
 const deviceLifecycleManager = new DeviceLifecycleManager(deviceStore);
 
 const echoNetListController = new EchoNetLiteController(networkAddressForEchonet,
-  aliasOption, echonetUnknownAsError,
+  friendlyNameOption, echonetUnknownAsError,
   knownDeviceIpList, echonetDisableAutoDeviceDiscovery===false, echonetCommandTimeout,
   (internalId:string)=>deviceStore.getByInternalId(internalId),
   echonetPropertyRequestRetryCount,

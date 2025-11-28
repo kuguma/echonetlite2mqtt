@@ -146,7 +146,7 @@ export class RestApiOpenApiConverter{
       properties:{
         id:{type:'string', description:'Device-specific ID'},
         eoj:{type:'string', description:'ECHONET Lite object code'},
-        name:{type:'string', description:'Device id or alias name'},
+        name:{type:'string', description:'Device id or friendly name'},
         actions:{
           type:'array',
           description:'This property is unused. Always an empty array.',

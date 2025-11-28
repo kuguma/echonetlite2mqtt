@@ -177,21 +177,21 @@ ECHONET Lite Options
 | `ECHONET_PROPERTY_REQUEST_RETRY_DELAY` | (none) | Specify the retry interval for property requests. (Unit: ms) (Default: 0) |
 | `ECHONET_PERIODIC_DISCOVERY_INTERVAL_SEC` | `--echonetPeriodicDiscoveryIntervalSec` | Specify the interval for periodic device discovery in seconds. Set to 0 to disable. (Default: 0) |
 | `ECHONET_DISABLE_AUTO_DEVICE_DISCOVERY` | `--echonetDisableAutoDeviceDiscovery` | Disable automatic device discovery. (default: off) |
-| `ECHONET_ALIAS_FILE`   | `--echonetAliasFile`  | The file path for alias option file. (Defalt: (empty)) |
+| `ECHONET_FRIENDLY_NAME_FILE`   | `--echonetFriendlyNameFile`  | The file path for friendly name option file. (Defalt: (empty)) |
 | `ECHONET_UNKNOWN_AS_ERROR`   | `--echonetUnknownAsError`  | Specifies whether to  treat unknown classes and unknown properties as errors. (Default: off) |
 | `ECHONET_PROPERTY_SYNC_CONFIG_FILE` | `--echonetPropertySyncConfigFile` | Path to the PropertySync configuration file. Enables periodic property polling and device availability monitoring. (Default: empty) |
 | ~~`ECHONET_INTERVAL_TO_GET_PROPERTIES`~~ | ~~`--echonetIntervalToGetProperties`~~ | (Deprecated since v3.0.0) ~~Specifies the time interval for acquiring ECHONET Lite properties. (Unit: ms) (Default: 100)~~ |
 | ~~`ECHONET_ALT_MULTI_NIC_MODE`~~ | ~~`--echonetAltMultiNicMode`~~ | (Deprecated since v3.0.0) ~~Alternate mode in a multiple NIC environment. Specifies if you cannot receive status from the device. (Default: off)~~ |
 
-### Alias Option File Format
+### Friendly Name Option File Format
 
-You can alias device Ids using `ECHONET_ALIAS_FILE` ( or `--echonetAliasFile` ) option.
-This option specifies the path of the Alias Option File.
+You can set friendly names for device Ids using `ECHONET_FRIENDLY_NAME_FILE` ( or `--echonetFriendlyNameFile` ) option.
+This option specifies the path of the Friendly Name Option File.
 
-The Alias ​​Option File is a Json file with the following format:
+The Friendly Name Option File is a Json file with the following format:
 ```
 {
-  "aliases":[
+  "friendlyNames":[
     {
       "name":"living_aircon",
       "eoj":"0130*",
@@ -207,12 +207,12 @@ The Alias ​​Option File is a Json file with the following format:
 
 |Property| Description |
 | -------- | ---------------- |
-| name | [Required] Name of device to be used instead of ID |
+| name | [Required] Friendly name to be used instead of ID |
 | ip | IP address to identify device. `*` can be used as wildcard. |
 | eoj | ECHONET Lite object ID to identify device. `*` can be used as wildcard. |
 | id | ID to identify device. `*` can be used as wildcard. |
 
-An alias is selected if all of the ip, eoj, and id conditions are met.
+A friendly name is selected if all of the ip, eoj, and id conditions are met.
 If there are multiple matches, the first match takes precedence.
 
 ### Device Availability (LWT)
@@ -274,14 +274,14 @@ the major changes from version 1.x to version 2.x:
 * (3) The property "schema" specification changed.
 * (4) Redesigned the web front end.
 
-If you want to keep compatibility with version 1.x as much as possible, you can use the `MQTT_BASE_TOPIC` (or `--MqttBaseTopic` ) option for (1) and the `ECHONET_ALIAS_FILE` ( or `--echonetAliasFile` ) option for (2).
+If you want to keep compatibility with version 1.x as much as possible, you can use the `MQTT_BASE_TOPIC` (or `--MqttBaseTopic` ) option for (1) and the `ECHONET_FRIENDLY_NAME_FILE` ( or `--echonetFriendlyNameFile` ) option for (2).
 
 ```
-docker run -d --net=host -e MQTT_BROKER="mqtt://your.mqtt.brocker" -e MQTT_BASE_TOPIC="echonetlite2mqtt/elapi/v1/devices" -e ECHONET_ALIAS_FILE=/app/configure/alias.json -v (some folder):/app/configure banban525/echonetlite2mqtt 
+docker run -d --net=host -e MQTT_BROKER="mqtt://your.mqtt.brocker" -e MQTT_BASE_TOPIC="echonetlite2mqtt/elapi/v1/devices" -e ECHONET_FRIENDLY_NAME_FILE=/app/configure/friendlyname.json -v (some folder):/app/configure banban525/echonetlite2mqtt
 
-or 
+or
 
-npm start -- --MqttBroker "mqtt://your.mqtt.brocker" --MqttBaseTopic "echonetlite2mqtt/elapi/v1/devices" --echonetAliasFile ./alias.json
+npm start -- --MqttBroker "mqtt://your.mqtt.brocker" --MqttBaseTopic "echonetlite2mqtt/elapi/v1/devices" --echonetFriendlyNameFile ./friendlyname.json
 ```
 
 

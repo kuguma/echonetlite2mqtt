@@ -73,7 +73,7 @@ export interface DeviceId {
   internalId:string;
 }
 
-export interface DeviceAlias
+export interface DeviceFriendlyName
 {
   id?:string;
   eoj?:string;
@@ -87,22 +87,22 @@ export interface ValidationResult
   message:string;
 }
 
-export class DeviceAlias
+export class DeviceFriendlyName
 {
-  static validate(deviceAlias:DeviceAlias):ValidationResult
+  static validate(deviceFriendlyName:DeviceFriendlyName):ValidationResult
   {
     let message = "";
-    if(deviceAlias.id !== undefined && deviceAlias.id.match(/[^0-9a-fA-F\*]/) !== null)
+    if(deviceFriendlyName.id !== undefined && deviceFriendlyName.id.match(/[^0-9a-fA-F\*]/) !== null)
     {
-      message = "id must be hexadecimal or '*' : " + deviceAlias.id;
+      message = "id must be hexadecimal or '*' : " + deviceFriendlyName.id;
     }
-    if(deviceAlias.eoj !== undefined && deviceAlias.eoj.match(/[^0-9a-fA-F\*]/) !== null)
+    if(deviceFriendlyName.eoj !== undefined && deviceFriendlyName.eoj.match(/[^0-9a-fA-F\*]/) !== null)
     {
-      message = "eoj must be hexadecimal or '*' : " + deviceAlias.eoj;
+      message = "eoj must be hexadecimal or '*' : " + deviceFriendlyName.eoj;
     }
-    if(deviceAlias.ip !== undefined && deviceAlias.ip.match(/[^0-9\.\*]/) !== null)
+    if(deviceFriendlyName.ip !== undefined && deviceFriendlyName.ip.match(/[^0-9\.\*]/) !== null)
     {
-      message = "ip must decimal number , '.' or '*' : " + deviceAlias.ip;
+      message = "ip must decimal number , '.' or '*' : " + deviceFriendlyName.ip;
     }
     
     if(message === "")
@@ -114,28 +114,28 @@ export class DeviceAlias
       return {valid:false, message};
     }
   }
-  static isMatch(deviceAlias:DeviceAlias, id:string, eoj:string, ip:string):boolean
+  static isMatch(deviceFriendlyName:DeviceFriendlyName, id:string, eoj:string, ip:string):boolean
   {
-    // deviceAliasのid,eoj,ipのうち、undefinedでないものがdeviceIdと一致しているか確認する
+    // deviceFriendlyNameのid,eoj,ipのうち、undefinedでないものがdeviceIdと一致しているか確認する
     // これらのid,eoj,ipの中に含まれる * はワイルドカードとして扱うので、正規表現でマッチングする
-    if(deviceAlias.id !== undefined)
+    if(deviceFriendlyName.id !== undefined)
     {
-      if(id.match(deviceAlias.id.replace(/\*/gi, ".*")) === null)
+      if(id.match(deviceFriendlyName.id.replace(/\*/gi, ".*")) === null)
       {
         return false;
       }
     }
-    if(deviceAlias.eoj !== undefined)
+    if(deviceFriendlyName.eoj !== undefined)
     {
-      if(eoj.match(deviceAlias.eoj.replace(/\*/gi, ".*")) === null)
+      if(eoj.match(deviceFriendlyName.eoj.replace(/\*/gi, ".*")) === null)
       {
         return false;
       }
     }
-    if(deviceAlias.ip !== undefined)
+    if(deviceFriendlyName.ip !== undefined)
     {
       // ipは正規表現のエスケープをしてから比較する
-      if(ip.match(deviceAlias.ip.replace(/\./gi, "\\.").replace(/\*/g, ".*")) === null)
+      if(ip.match(deviceFriendlyName.ip.replace(/\./gi, "\\.").replace(/\*/g, ".*")) === null)
       {
         return false;
       }
@@ -145,29 +145,29 @@ export class DeviceAlias
   }
 }
 
-export interface AliasOption
+export interface FriendlyNameOption
 {
-  aliases: DeviceAlias[];
+  friendlyNames: DeviceFriendlyName[];
 }
 
-export class AliasOption
+export class FriendlyNameOption
 {
-  public static empty: Readonly<AliasOption> = {
-    aliases: []
+  public static empty: Readonly<FriendlyNameOption> = {
+    friendlyNames: []
   };
-  public static validate(aliasOption:AliasOption):ValidationResult
+  public static validate(friendlyNameOption:FriendlyNameOption):ValidationResult
   {
-    if(aliasOption.aliases===undefined)
+    if(friendlyNameOption.friendlyNames===undefined)
     {
-      return {valid:false, message:"aliases is undefined"};
+      return {valid:false, message:"friendlyNames is undefined"};
     }
-    if(Array.isArray(aliasOption.aliases)===false)
+    if(Array.isArray(friendlyNameOption.friendlyNames)===false)
     {
-      return {valid:false, message:"aliases is not array"};
+      return {valid:false, message:"friendlyNames is not array"};
     }
 
-    const faildValidationResults = aliasOption.aliases
-      .map(_=>DeviceAlias.validate(_)).filter(_=>_.valid===false);
+    const faildValidationResults = friendlyNameOption.friendlyNames
+      .map(_=>DeviceFriendlyName.validate(_)).filter(_=>_.valid===false);
     if(faildValidationResults.length>0)
     {
       return {valid:false, 

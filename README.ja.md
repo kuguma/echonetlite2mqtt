@@ -171,22 +171,22 @@ ECHONET Lite オプション
 | `ECHONET_PROPERTY_REQUEST_RETRY_DELAY` | (なし) | プロパティリクエストのリトライ間隔を指定します。(単位: ms) (デフォルト: 0) |
 | `ECHONET_PERIODIC_DISCOVERY_INTERVAL_SEC` | `--echonetPeriodicDiscoveryIntervalSec` | デバイスの定期探索の間隔を秒で指定します。0を指定すると無効化されます。(デフォルト: 0) |
 | `ECHONET_DISABLE_AUTO_DEVICE_DISCOVERY` | `--echonetDisableAutoDeviceDiscovery` | デバイスの自動探索を無効にします。(デフォルト: off) |
-| `ECHONET_ALIAS_FILE`   | `--echonetAliasFile`  | エイリアスオプションファイルを指定します。 (デフォルト: (空)) |
+| `ECHONET_FRIENDLY_NAME_FILE`   | `--echonetFriendlyNameFile`  | フレンドリーネームオプションファイルを指定します。 (デフォルト: (空)) |
 | `ECHONET_UNKNOWN_AS_ERROR`   | `--echonetUnknownAsError`  | 不明なデバイスクラスや不明なプロパティをエラーとして扱います。 (デフォルト: off) |
 | `ECHONET_PROPERTY_SYNC_CONFIG_FILE` | `--echonetPropertySyncConfigFile` | PropertySync設定ファイルのパスを指定します。プロパティの定期ポーリングとデバイス死活監視を有効にします。(デフォルト: 空) |
 | ~~`ECHONET_INTERVAL_TO_GET_PROPERTIES`~~ | ~~`--echonetIntervalToGetProperties`~~ | (v3.0.0以降で廃止されました) ~~ECHONET Liteプロパティの受信間隔を指定します。(単位: ms) (デフォルト: 100)~~ |
 | ~~`ECHONET_ALT_MULTI_NIC_MODE`~~ | ~~`--echonetAltMultiNicMode`~~ | (v3.0.0以降で廃止されました) ~~複数NIC環境での代替モードです。もしデバイスから状態を受信できない場合は指定します。 (デフォルト: OFF)~~ |
 
-### エイリアスオプションファイルの形式
+### フレンドリーネームオプションファイルの形式
 
-`ECHONET_ALIAS_FILE` または `--echonetAliasFile` を使ってオプションファイルのパスを指定することで、
-デバイスIdのエイリアスを指定することができます。
+`ECHONET_FRIENDLY_NAME_FILE` または `--echonetFriendlyNameFile` を使ってオプションファイルのパスを指定することで、
+デバイスIdのフレンドリーネーム(表示名)を指定することができます。
 
-エイリアスオプションファイルは次の形式のJsonファイルです。
+フレンドリーネームオプションファイルは次の形式のJsonファイルです。
 
 ```
 {
-  "aliases":[
+  "friendlyNames":[
     {
       "name":"living_aircon",
       "eoj":"0130*",
@@ -202,12 +202,12 @@ ECHONET Lite オプション
 
 |プロパティ| 説明 |
 | -------- | ---------------- |
-| name     | [必須] Idの代わりに付けるデバイスの名前 |
+| name     | [必須] Idの代わりに付けるデバイスの表示名 |
 | ip       | デバイスを特定するためのIpアドレス。 ワイルドカードとして `*` が使用可能です。 |
 | eoj      | デバイスを特定するためのECHONET LiteのオブジェクトId。 ワイルドカードとして `*` が使用可能です。 |
 | id       | デバイスを特定するためのId。 ワイルドカードとして `*` が使用可能です。 |
 
-ip、eoj、idの条件をすべてみたした場合に、エイリアスが採用されます。
+ip、eoj、idの条件をすべてみたした場合に、フレンドリーネームが採用されます。
 複数マッチした場合は先頭が優先されます。
 
 ### デバイス死活監視 (Availability/LWT)
@@ -271,14 +271,14 @@ ver.1.x から ver.2.xの主な変更点は以下です。
 * (4) Web UIが再構築されました。
 
 できるだけ、ver.1.xとの互換性を保ちたい場合、(1)の対応には`MQTT_BASE_TOPIC` (または `--MqttBaseTopic` )を、
-(2)の対応には、`ECHONET_ALIAS_FILE` ( または `--echonetAliasFile` ) を使ってください。
+(2)の対応には、`ECHONET_FRIENDLY_NAME_FILE` ( または `--echonetFriendlyNameFile` ) を使ってください。
 
 ```
-docker run -d --net=host -e MQTT_BROKER="mqtt://your.mqtt.brocker" -e MQTT_BASE_TOPIC="echonetlite2mqtt/elapi/v1/devices" -e ECHONET_ALIAS_FILE=/app/configure/alias.json -v (some folder):/app/configure banban525/echonetlite2mqtt 
+docker run -d --net=host -e MQTT_BROKER="mqtt://your.mqtt.brocker" -e MQTT_BASE_TOPIC="echonetlite2mqtt/elapi/v1/devices" -e ECHONET_FRIENDLY_NAME_FILE=/app/configure/friendlyname.json -v (some folder):/app/configure banban525/echonetlite2mqtt
 
-or 
+or
 
-npm start -- --MqttBroker "mqtt://your.mqtt.brocker" --MqttBaseTopic "echonetlite2mqtt/elapi/v1/devices" --echonetAliasFile ./alias.json
+npm start -- --MqttBroker "mqtt://your.mqtt.brocker" --MqttBaseTopic "echonetlite2mqtt/elapi/v1/devices" --echonetFriendlyNameFile ./friendlyname.json
 ```
 
 
