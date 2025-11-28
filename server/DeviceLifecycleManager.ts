@@ -10,8 +10,19 @@ import { Logger } from "./Logger";
  * - ノードプロファイルの場合は配下デバイスへの伝播
  *
  * トリガー側（PropertySyncManager、propertyChangedなど）は
- * このクラスのメソッドを呼ぶだけでよい
+ * このクラスのメソッドを呼ぶだけでよい。
+ * トリガー側はデバイスの状態を勘案せずイベントを呼んでも良い。状態が変わらない場合の発火抑制はこのクラスが担当する。
+ * ↑Claudeへ、これまだ未実装なので実装して
  */
+
+/*
+TODO Claudeへ、
+実際のシナリオとその際のプログラムの流れをここにメモとして書いてほしい。
+・ディスカバリ完了→birth発火
+・切断→propertySyncManagerがDEAD検知→dead発火
+・デバイス復活→何かしらのプロパティ取得に成功 or inf着弾→birth発火
+*/
+
 export class DeviceLifecycleManager {
   private deviceStore: DeviceStore;
 
@@ -51,18 +62,10 @@ export class DeviceLifecycleManager {
 
   /**
    * デバイスが生存状態になったことをマーク
-   * ノードプロファイルの場合は配下デバイスも生存とする
+   * 死亡の場合とは非対称で、ノードプロファイルの場合も特別扱いはしない。
    */
   markDeviceAsAlive(device: Device): void {
     this.fireDeviceBirth(device);
-
-    // ノードプロファイルの場合、配下デバイスも生存とする
-    if (this.isNodeProfile(device.eoj)) {
-      const childDevices = this.getChildDevices(device.ip, device.eoj);
-      for (const child of childDevices) {
-        this.fireDeviceBirth(child);
-      }
-    }
   }
 
   /**
@@ -96,24 +99,6 @@ export class DeviceLifecycleManager {
       // ノードプロファイルがない場合は全デバイスを個別に処理
       for (const device of devicesInNode) {
         this.fireDeviceDead(device);
-      }
-    }
-  }
-
-  /**
-   * IPアドレスを指定してノード全体を生存状態にする
-   */
-  markNodeAsAliveByIp(ip: string): void {
-    const devicesInNode = this.deviceStore.getAll().filter(d => d.ip === ip);
-
-    // ノードプロファイルを先に処理（あれば）
-    const nodeProfile = devicesInNode.find(d => this.isNodeProfile(d.eoj));
-    if (nodeProfile) {
-      this.markDeviceAsAlive(nodeProfile);
-    } else {
-      // ノードプロファイルがない場合は全デバイスを個別に処理
-      for (const device of devicesInNode) {
-        this.fireDeviceBirth(device);
       }
     }
   }

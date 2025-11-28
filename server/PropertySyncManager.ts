@@ -5,6 +5,16 @@ import { Mutex } from "async-mutex";
 import { EchoNetLiteRawController } from "./EchoNetLiteRawController";
 import { DeviceLifecycleManager } from "./DeviceLifecycleManager";
 
+/*
+  ENLデバイスが持つプロパティをブリッジ側で定期的に取得し、最新状態に保つためのクラス。
+  設定ファイルが指定するルールに基づき、特定デバイスクラスの特定プロパティを一定間隔で取得する。
+
+  プロパティの鮮度が保たれない場合、デバイスに対してプロパティ取得リクエストを送信する。
+  取得に失敗した場合は指数関数的バックオフを適用し、最大16倍まで間隔を伸ばす。
+  さらにタイムアウトが10回以上連続して発生し、かつバックオフが最大の場合、そのプロパティを「死亡」状態とし、
+  以降24時間に1回のみリトライを試みる。
+*/
+
 // Constants for property sync behavior
 const DEAD_RETRY_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MAX_BACKOFF_MULTIPLIER = 16;

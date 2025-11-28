@@ -758,17 +758,15 @@ echoNetListController.addPropertyChangedEvent((ip:string, eoj:string, propertyNa
     eventRepository.newEvent(`LOG`);
     restApiController.setNewEvent();
 
-    // ノードプロファイルのoperatingStatus変更を検出して死活状態を通知
+    // ノードプロファイルのoperatingStatusがfalseになったら、そのデバイスを死亡扱いにする
+    // とはいっても実際のシナリオではノードプロファイルが自分でフラグを変えるのではなく、propertySyncManagerの方で必須プロパティがDEADになって死亡検知という流れになるはず。
     if(propertyName === "operatingStatus" && eoj.toLowerCase().startsWith("0ef0"))
     {
       const isOnline = newValue === true || newValue === "true";
       if(!isOnline)
       {
+        // LifecycleManagerにより配下のデバイスも死亡扱いになる。
         deviceLifecycleManager.markDeviceAsDead(device);
-      }
-      else
-      {
-        deviceLifecycleManager.markDeviceAsAlive(device);
       }
     }
   }
