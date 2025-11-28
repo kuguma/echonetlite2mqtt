@@ -711,7 +711,8 @@ echoNetListController.addDeviceDetectedEvent((device:Device)=>{
   mqttController.publishDevices();
   mqttController.publishDevice(device.id);
   mqttController.publishDevicePropertiesAndAllProperty(device.id);
-  mqttController.publishDeviceAvailability(device.id, true);
+  // Birth イベント発火（LifecycleManager経由でMQTT availabilityも発行される）
+  deviceLifecycleManager.markDeviceAsAlive(device);
   eventRepository.newEvent(`${device.id}`);
   eventRepository.newEvent(`SYSTEM`);
   eventRepository.newEvent(`LOG`);
@@ -726,7 +727,8 @@ echoNetListController.addDeviceUpdatedEvent((currentDevice:Device, newDevice:Dev
   mqttController.publishDevices();
   mqttController.publishDevice(newDevice.id);
   mqttController.publishDevicePropertiesAndAllProperty(newDevice.id);
-  mqttController.publishDeviceAvailability(newDevice.id, true);
+  // Birth イベント発火（LifecycleManager経由でMQTT availabilityも発行される）
+  deviceLifecycleManager.markDeviceAsAlive(newDevice);
   eventRepository.newEvent(`${newDevice.id}`);
   eventRepository.newEvent(`SYSTEM`);
   eventRepository.newEvent(`LOG`);
@@ -744,6 +746,12 @@ echoNetListController.addPropertyChangedEvent((ip:string, eoj:string, propertyNa
   {
     return;
   }
+
+  // プロパティを受信できた = デバイスは生存している（GET成功 or INF受信）
+  // 値が変わっていなくても、受信できた時点で生存確認完了
+  // LifecycleManagerが重複発火を抑制するので、毎回呼んでOK
+  deviceLifecycleManager.markDeviceAsAlive(device);
+
   const oldValue = deviceStore.getProperty(device.id, propertyName);
 
   deviceStore.changeProperty(device.id, propertyName, newValue);
