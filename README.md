@@ -215,6 +215,8 @@ The Friendly Name Option File is a Json file with the following format:
 A friendly name is selected if all of the ip, eoj, and id conditions are met.
 If there are multiple matches, the first match takes precedence.
 
+> **Note:** When a friendly name is set, the device's MQTT topic and REST API endpoint will use the friendly name instead of the original ID. Access via the original ID will no longer be available. This is a replacement, not an alias.
+
 ### Device Availability (LWT)
 
 echonetlite2mqtt publishes device availability status to MQTT when PropertySync is enabled.
