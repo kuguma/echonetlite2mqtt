@@ -3,6 +3,7 @@ import { Logger } from "./Logger";
 import { DeviceStore } from "./DeviceStore";
 import { Mutex } from "async-mutex";
 import { EchoNetLiteRawController } from "./EchoNetLiteRawController";
+import { DeviceLifecycleManager } from "./DeviceLifecycleManager";
 
 // Constants for property sync behavior
 const DEAD_RETRY_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -46,8 +47,16 @@ export class PropertySyncManager {
   private requestDevicePropertyFn?: (id: {id:string, ip:string, eoj:string, internalId:string}, propertyName: string, options?: any) => Promise<void>;
   private readonly syncMutex = new Mutex();
   private rawController?: EchoNetLiteRawController; // デバイス探索完了チェック用
+  private lifecycleManager?: DeviceLifecycleManager; // デバイス死活管理
 
   constructor() {
+  }
+
+  /**
+   * DeviceLifecycleManagerを設定
+   */
+  public setLifecycleManager(lifecycleManager: DeviceLifecycleManager): void {
+    this.lifecycleManager = lifecycleManager;
   }
 
   /**
@@ -180,11 +189,29 @@ export class PropertySyncManager {
 
     // タイムアウトが10回以上かつバックオフ最大なら死亡マーク
     if (state.timeoutCount >= DEAD_MARK_TIMEOUT_THRESHOLD && state.backoffMultiplier >= MAX_BACKOFF_MULTIPLIER) {
+      const wasAlreadyDead = state.dead;
       state.dead = true;
       Logger.warn("[PropertySync]", `${ip}:${eoj} ${propertyName}: Marked as DEAD after ${state.timeoutCount} consecutive failures`);
+
+      // ノードプロファイルのoperatingStatusがDEADになった場合、ノード内の全デバイスの死亡イベントを発火
+      if (!wasAlreadyDead && propertyName === "operatingStatus" && eoj.toLowerCase().startsWith("0ef0")) {
+        this.fireNodeDeadEvent(ip);
+      }
     } else {
       Logger.debug("[PropertySync]", `${ip}:${eoj} ${propertyName}: Failed, backoff increased to ${state.backoffMultiplier}x (timeout count: ${state.timeoutCount})`);
     }
+  }
+
+  /**
+   * ノード死亡イベントを発火（DeviceLifecycleManagerに委譲）
+   */
+  private fireNodeDeadEvent(ip: string): void {
+    if (!this.lifecycleManager) {
+      Logger.warn("[PropertySync]", `${ip}: Cannot fire node dead event (lifecycleManager not available)`);
+      return;
+    }
+
+    this.lifecycleManager.markNodeAsDeadByIp(ip);
   }
 
   /**

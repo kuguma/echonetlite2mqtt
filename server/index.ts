@@ -4,6 +4,7 @@ import { DeviceStore } from "./DeviceStore";
 import { EchoNetLiteController } from "./EchoNetLiteController";
 import { RestApiController } from "./RestApiController";
 import { PropertySyncManager } from "./PropertySyncManager";
+import { DeviceLifecycleManager } from "./DeviceLifecycleManager";
 import fs from "fs";
 import mqtt from "mqtt";
 import { SystemStatusRepositry } from "./ApiTypes";
@@ -685,6 +686,8 @@ const systemStatusRepository = new SystemStatusRepositry();
 
 const deviceStore = new DeviceStore();
 
+const deviceLifecycleManager = new DeviceLifecycleManager(deviceStore);
+
 const echoNetListController = new EchoNetLiteController(networkAddressForEchonet,
   aliasOption, echonetUnknownAsError,
   knownDeviceIpList, echonetDisableAutoDeviceDiscovery===false, echonetCommandTimeout,
@@ -759,25 +762,13 @@ echoNetListController.addPropertyChangedEvent((ip:string, eoj:string, propertyNa
     if(propertyName === "operatingStatus" && eoj.toLowerCase().startsWith("0ef0"))
     {
       const isOnline = newValue === true || newValue === "true";
-      const devicesInNode = deviceStore.getAll().filter(d => d.ip === ip);
-
       if(!isOnline)
       {
-        // ノードが停止した場合、全デバイスの死亡イベントを発火
-        logger.output(`[ECHONETLite] node dead:    ${ip} (${devicesInNode.length} devices affected)`);
-        const eojList = devicesInNode.map(d => d.eoj);
-        echoNetListController.getRawController().fireDeviceDead(ip, eojList);
-        devicesInNode.forEach(d => {
-          mqttController.publishDeviceAvailability(d.id, false);
-        });
+        deviceLifecycleManager.markDeviceAsDead(device);
       }
       else
       {
-        // ノードが復活した場合、全デバイスのオンラインを通知
-        logger.output(`[ECHONETLite] node alive:   ${ip} (${devicesInNode.length} devices affected)`);
-        devicesInNode.forEach(d => {
-          mqttController.publishDeviceAvailability(d.id, true);
-        });
+        deviceLifecycleManager.markDeviceAsAlive(device);
       }
     }
   }
@@ -876,6 +867,14 @@ mqttController.addConnectionStateChangedEvent(():void=>{
   restApiController.setNewEvent();
 });
 
+// デバイス死活イベントのリスナー登録（MQTT availabilityの発行など）
+deviceLifecycleManager.addDeviceBirthEvent((device: Device):void => {
+  mqttController.publishDeviceAvailability(device.id, true);
+});
+deviceLifecycleManager.addDeviceDeadEvent((device: Device):void => {
+  mqttController.publishDeviceAvailability(device.id, false);
+});
+
 restApiController.start();
 mqttController.start();
 if(mqttBroker === "")
@@ -889,6 +888,7 @@ echoNetListController.start().then(() => {
   {
     const propertySyncManager = new PropertySyncManager();
     propertySyncManager.loadConfig(echonetPropertySyncConfigFile);
+    propertySyncManager.setLifecycleManager(deviceLifecycleManager);
 
     // DeviceStoreにPropertySyncManagerを設定
     deviceStore.setPropertySyncManager(propertySyncManager);
