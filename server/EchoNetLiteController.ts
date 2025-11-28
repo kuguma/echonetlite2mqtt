@@ -1,5 +1,5 @@
 import { eldata,rinfo } from "echonet-lite";
-import { AliasOption, Device, DeviceId } from "./Property";
+import { FriendlyNameOption, Device, DeviceId } from "./Property";
 import EchoNetDeviceConverter from "./EchoNetDeviceConverter";
 import { EchoNetLiteRawController, QueuePriority } from "./EchoNetLiteRawController";
 import { EchoNetHoldController } from "./EchoNetHoldController";
@@ -11,7 +11,7 @@ export type findDeviceCallback = (internalId:string)=>Device|undefined;
 
 export class EchoNetLiteController{
   
-  private readonly aliasOption: AliasOption;
+  private readonly friendlyNameOption: FriendlyNameOption;
   private readonly echonetLiteRawController:EchoNetLiteRawController;
   private readonly holdController:EchoNetHoldController;
   private readonly deviceConverter:EchoNetDeviceConverter;
@@ -25,7 +25,7 @@ export class EchoNetLiteController{
   private readonly propertyRequestRetryCount:number;
   private readonly propertyRequestRetryDelay:number;
   constructor(usedIpByEchoNet:string,
-    aliasOption: AliasOption,
+    friendlyNameOption: FriendlyNameOption,
     unknownAsError:boolean,
     knownDeviceIpList:string[],
     searchDevices:boolean,
@@ -34,8 +34,8 @@ export class EchoNetLiteController{
     propertyRequestRetryCount:number = 1,
     propertyRequestRetryDelay:number = 0)
   {
-    this.aliasOption = aliasOption;
-    this.deviceConverter = new EchoNetDeviceConverter(this.aliasOption, unknownAsError);
+    this.friendlyNameOption = friendlyNameOption;
+    this.deviceConverter = new EchoNetDeviceConverter(this.friendlyNameOption, unknownAsError);
     this.echonetLiteRawController = new EchoNetLiteRawController();
     this.holdController = new EchoNetHoldController({request:this.requestDeviceProperty, set:this.setDevicePropertyPrivate, isBusy:()=>this.echonetLiteRawController.getSendQueueLength() >= 1});
     this.unknownAsError = unknownAsError;
