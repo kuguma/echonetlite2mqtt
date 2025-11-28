@@ -14,6 +14,7 @@ import crypto from "crypto";
 import { RestApiOpenApiConverter } from "./RestApiOpenApiConverter";
 import swaggerUi from 'swagger-ui-express';
 import { WebSocket, WebSocketServer } from "ws";
+import { DeviceLifecycleManager } from "./DeviceLifecycleManager";
 
 interface ViewProperty{
   propertyName:string;
@@ -34,13 +35,14 @@ export class RestApiController
   private readonly mqttBaseTopic:string;
   private readonly detailLogsCallback:()=>{fileName:string, content:string}[];
   private wss:WebSocketServer|undefined;
+  private deviceLifecycleManager:DeviceLifecycleManager|undefined;
 
-  constructor(deviceStore:DeviceStore, 
+  constructor(deviceStore:DeviceStore,
     systemStatusRepository:SystemStatusRepositry,
-    eventRepository:EventRepository, 
+    eventRepository:EventRepository,
     logRepository:LogRepository,
     echoNetLiteController:EchoNetLiteController,
-    hostName:string, 
+    hostName:string,
     port:number,
     root:string,
     mqttBaseTopic:string,
@@ -58,6 +60,33 @@ export class RestApiController
     this.detailLogsCallback = detailLogsCallback;
 
     setInterval(this.timeoutLongPolling, 10*1000);
+  }
+
+  /**
+   * DeviceLifecycleManagerをセット（availability表示用）
+   */
+  setLifecycleManager(manager: DeviceLifecycleManager): void {
+    this.deviceLifecycleManager = manager;
+  }
+
+  /**
+   * デバイスのavailability情報を取得
+   */
+  private getDeviceAvailability(device: Device): { topic: string; state: "online" | "offline" | "unknown" } {
+    const topic = `${this.mqttBaseTopic}/${device.id}/availability`;
+
+    if (!this.deviceLifecycleManager) {
+      return { topic, state: "unknown" };
+    }
+
+    const aliveState = this.deviceLifecycleManager.getDeviceState(device.internalId);
+    if (aliveState === true) {
+      return { topic, state: "online" };
+    } else if (aliveState === false) {
+      return { topic, state: "offline" };
+    } else {
+      return { topic, state: "unknown" };
+    }
   }
 
   public start = ():void=>{
@@ -183,10 +212,11 @@ export class RestApiController
     const propertyViewModels = this.toUIData(foundDevice);
 
     const mqttTopic = `${this.mqttBaseTopic}/${foundDevice.name}`;
+    const availability = this.getDeviceAvailability(foundDevice);
 
     const allProperties = JSON.stringify(Device.ToProperiesObject(foundDevice.propertiesValue), null, 2);
     res.locals["root"] = root;
-    res.render("./device.ejs", {device:foundDevice, allProperties, propertyViewModels, context:{mqttTopic}, root:root});
+    res.render("./device.ejs", {device:foundDevice, allProperties, propertyViewModels, context:{mqttTopic, availability}, root:root});
   }
 
 
@@ -667,10 +697,11 @@ export class RestApiController
         deviceType: _.deviceType,
         manufacturer: _.manufacturer,
         mqttTopics: `${this.mqttBaseTopic}/${_.id}`,
-        protocol:_.protocol
+        protocol:_.protocol,
+        availability: this.getDeviceAvailability(_)
       }
     ))
-  
+
     res.json(result);
   }
   private getLogs = (

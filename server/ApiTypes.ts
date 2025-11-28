@@ -51,6 +51,10 @@ export interface ApiDeviceSummary
       ja:string;
       en:string;
     }
+  };
+  availability?:{
+    topic:string;
+    state: "online" | "offline" | "unknown";
   }
 }
   

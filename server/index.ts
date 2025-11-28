@@ -787,6 +787,7 @@ const detailLogsCallback : ()=>{fileName:string, content:string}[] = ()=>{
 }
 
 const restApiController = new RestApiController(deviceStore, systemStatusRepository, eventRepository, logger, echoNetListController, restApiHost, restApiPort, restApiRoot, mqttBaseTopic, detailLogsCallback);
+restApiController.setLifecycleManager(deviceLifecycleManager);
 restApiController.addPropertyChangedRequestEvent(async (deviceId:string, propertyName:string, newValue:any):Promise<void>=>{
 
   const device = deviceStore.getFromNameOrId(deviceId);
