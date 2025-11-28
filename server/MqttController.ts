@@ -4,6 +4,7 @@ import { ApiDevice, ApiDeviceProperty, ApiDeviceSummary } from "./ApiTypes";
 import { Device } from "./Property";
 import { ElDataType, ElPropertyDescription } from "./MraTypes";
 import { Logger } from "./Logger";
+import { DeviceMqttClientManager } from "./DeviceMqttClientManager";
 
 export class MqttController
 {
@@ -12,11 +13,16 @@ export class MqttController
   readonly mqttBroker:string;
   readonly mqttOption:mqtt.IClientOptions;
   readonly baseTopic:string;
+  // デバイスごとのMQTTクライアント管理（LWT対応）
+  readonly deviceMqttClientManager: DeviceMqttClientManager;
+
   constructor(deviceStore:DeviceStore, mqttBroker:string, mqttOption:mqtt.IClientOptions, baseTopic:string){
     this.deviceStore =deviceStore;
     this.mqttBroker = mqttBroker;
     this.mqttOption = mqttOption;
     this.baseTopic = baseTopic;
+    // デバイスごとのMQTTクライアント管理を初期化
+    this.deviceMqttClientManager = new DeviceMqttClientManager(mqttBroker, mqttOption, baseTopic);
   }
 
   public ConnectionState: "Connected"|"Disconnected"|"NotConfigure" = "Disconnected";
@@ -342,24 +348,28 @@ export class MqttController
   }
 
   publishDeviceAvailability = (deviceId:string, isOnline:boolean):void =>{
-    if(this.mqttClient===undefined){
-      return;
-    }
     const foundDevice = this.deviceStore.getFromNameOrId(deviceId);
     if(foundDevice===undefined){
+      Logger.warn("[MQTT]", `publishDeviceAvailability: device not found: ${deviceId}`);
       return;
     }
 
-    const availability = isOnline ? "online" : "offline";
-    this.mqttClient.publish(`${this.baseTopic}/${foundDevice.name}/availability`, availability, {
-      retain:true
-    });
-    if(foundDevice.id !== foundDevice.name)
-    {
-      this.mqttClient.publish(`${this.baseTopic}/${foundDevice.id}/availability`, availability, {
-        retain:true
-      });
+    // デバイス専用MQTTクライアントを使用（LWT対応）
+    // クライアントがなければ作成（初回birth時）
+    if (!this.deviceMqttClientManager.hasClient(foundDevice.id)) {
+      if (isOnline) {
+        // online時のみクライアントを作成（クライアント作成時に自動でonlineをpublish）
+        this.deviceMqttClientManager.createClientForDevice(foundDevice.id, foundDevice.name);
+        return; // createClientForDevice内でonlineをpublishするので、ここではreturn
+      } else {
+        // クライアントがない状態でofflineを要求された場合は何もしない
+        Logger.debug("[MQTT]", `No client for ${foundDevice.name}, skipping offline publish`);
+        return;
+      }
     }
+
+    // 既存クライアントでavailabilityをpublish
+    this.deviceMqttClientManager.publishAvailability(foundDevice.id, foundDevice.name, isOnline);
   }
 
   publishDeviceProperties = (deviceId:string):void =>{

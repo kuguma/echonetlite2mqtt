@@ -932,3 +932,39 @@ echoNetListController.start().then(() => {
     Logger.info("[PeriodicDiscovery]", "Periodic device discovery disabled");
   }
 });
+
+// ========== シャットダウン処理 ==========
+// 正常終了時に全デバイス用MQTTクライアントをクリーンアップ
+// （LWTは発動させず、明示的にofflineをpublishしてから切断）
+
+let isShuttingDown = false;
+
+const gracefulShutdown = (signal: string): void => {
+  if (isShuttingDown) {
+    logger.output(`[Shutdown] Already shutting down, ignoring ${signal}`);
+    return;
+  }
+  isShuttingDown = true;
+
+  logger.output(`[Shutdown] Received ${signal}, starting graceful shutdown...`);
+
+  // デバイス用MQTTクライアントをすべて破棄（offlineをpublish後に切断）
+  mqttController.deviceMqttClientManager.destroyAll()
+    .then(() => {
+      logger.output(`[Shutdown] Cleanup completed, exiting...`);
+      process.exit(0);
+    })
+    .catch((err) => {
+      logger.output(`[Shutdown] Error during cleanup: ${err}`);
+      process.exit(1);
+    });
+
+  // タイムアウト: 5秒以内に完了しなければ強制終了
+  setTimeout(() => {
+    logger.output(`[Shutdown] Timeout, forcing exit...`);
+    process.exit(1);
+  }, 5000);
+};
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
