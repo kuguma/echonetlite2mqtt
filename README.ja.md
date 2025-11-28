@@ -173,6 +173,7 @@ ECHONET Lite オプション
 | `ECHONET_DISABLE_AUTO_DEVICE_DISCOVERY` | `--echonetDisableAutoDeviceDiscovery` | デバイスの自動探索を無効にします。(デフォルト: off) |
 | `ECHONET_ALIAS_FILE`   | `--echonetAliasFile`  | エイリアスオプションファイルを指定します。 (デフォルト: (空)) |
 | `ECHONET_UNKNOWN_AS_ERROR`   | `--echonetUnknownAsError`  | 不明なデバイスクラスや不明なプロパティをエラーとして扱います。 (デフォルト: off) |
+| `ECHONET_PROPERTY_SYNC_CONFIG_FILE` | `--echonetPropertySyncConfigFile` | PropertySync設定ファイルのパスを指定します。プロパティの定期ポーリングとデバイス死活監視を有効にします。(デフォルト: 空) |
 | ~~`ECHONET_INTERVAL_TO_GET_PROPERTIES`~~ | ~~`--echonetIntervalToGetProperties`~~ | (v3.0.0以降で廃止されました) ~~ECHONET Liteプロパティの受信間隔を指定します。(単位: ms) (デフォルト: 100)~~ |
 | ~~`ECHONET_ALT_MULTI_NIC_MODE`~~ | ~~`--echonetAltMultiNicMode`~~ | (v3.0.0以降で廃止されました) ~~複数NIC環境での代替モードです。もしデバイスから状態を受信できない場合は指定します。 (デフォルト: OFF)~~ |
 
@@ -209,6 +210,56 @@ ECHONET Lite オプション
 ip、eoj、idの条件をすべてみたした場合に、エイリアスが採用されます。
 複数マッチした場合は先頭が優先されます。
 
+### デバイス死活監視 (Availability/LWT)
+
+PropertySyncを有効にすると、echonetlite2mqttはデバイスの死活状態をMQTTに発行します。
+これはHome Assistantなどのスマートホームプラットフォームで、Last Will and Testament (LWT) と同等の機能として使用できます。
+
+**Availabilityトピック:**
+```
+{mqtt_base_topic}/{device_id}/availability
+```
+
+**ペイロード:**
+- `online` - デバイスが正常に応答している
+- `offline` - デバイスが応答していない
+
+**動作の仕組み:**
+
+1. **Birth (online):** 以下の場合に発行されます:
+   - デバイスが発見されて初期化が完了したとき
+   - プロパティの取得（GET応答）に成功したとき
+   - デバイスからプロパティ通知（INF）を受信したとき
+
+2. **Dead (offline):** 以下の場合に発行されます:
+   - PropertySyncで連続したGET失敗を検出したとき（最大バックオフで10回以上のタイムアウト）
+   - ノードプロファイルの`operatingStatus`が`false`になったとき
+
+**注意事項:**
+
+- 自動的なオフライン検出には`ECHONET_PROPERTY_SYNC_CONFIG_FILE`の設定が必要です。
+- PropertySyncなしの場合、デバイスは発見時に`online`とマークされますが、自動的に`offline`にはなりません。
+- Web UIでも各デバイスの現在の死活状態を確認できます。
+
+**PropertySync設定ファイルの例:**
+
+JSONファイル（例: `property_sync_config.json`）を作成し、`ECHONET_PROPERTY_SYNC_CONFIG_FILE`で指定します:
+
+```json
+{
+  "syncRules": [
+    { "deviceClass": "nodeProfile", "properties": ["operatingStatus"], "intervalSec": 300, "onDeadRetryIntervalSec": 3600 },
+    { "deviceClass": "*", "properties": ["operationStatus"], "intervalSec": 60, "onDeadRetryIntervalSec": 3600 }
+  ]
+}
+```
+
+| プロパティ | 説明 |
+|----------|-------------|
+| deviceClass | 対象のデバイスクラス名。全デバイス対象は`*`を指定。 |
+| properties | 同期するプロパティ名の配列。全プロパティ対象は`["*"]`を指定。 |
+| intervalSec | ポーリング間隔（秒）。 |
+| onDeadRetryIntervalSec | (オプション) DEADプロパティのリトライ間隔。デフォルト: 86400（24時間）。 |
 
 ## ver.1.x から ver.2.x へのマイグレーション
 
