@@ -73,7 +73,7 @@ export class RestApiController
    * デバイスのavailability情報を取得
    */
   private getDeviceAvailability(device: Device): { topic: string; state: "online" | "offline" | "unknown" } {
-    const topic = `${this.mqttBaseTopic}/${device.id}/availability`;
+    const topic = `${this.mqttBaseTopic}/${device.name}/availability`;
 
     if (!this.deviceLifecycleManager) {
       return { topic, state: "unknown" };
