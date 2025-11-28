@@ -272,6 +272,14 @@ export class EchoNetLiteController{
     this.deviceUpdatedListeners.forEach(_=>_(lastDevice, device));
   }
 
+  deviceDeadListeners:((device:Device)=>void)[] = [];
+  addDeviceDeadEvent = (event:(device:Device)=>void):void =>{
+    this.deviceDeadListeners.push(event);
+  }
+  fireDeviceDead = (device:Device):void=>{
+    this.deviceDeadListeners.forEach(_=>_(device));
+  }
+
   // ホールド機能用。
   // https://github.com/banban525/echonetlite2mqtt/issues/21
   setDeviceProperty = async (id:DeviceId, propertyName:string, newValue:any, holdOption:HoldOption|undefined=undefined):Promise<void> =>

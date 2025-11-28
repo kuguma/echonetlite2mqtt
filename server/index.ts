@@ -701,13 +701,14 @@ echoNetListController.addDeviceDetectedEvent((device:Device)=>{
   {
     return;
   }
-  
+
   const deviceNameText = device.name.padEnd(41, " ");
   logger.output(`[ECHONETLite] new device:   ${deviceNameText} ${device.deviceType} ${device.ip} ${device.eoj}`);
   deviceStore.add(device);
   mqttController.publishDevices();
   mqttController.publishDevice(device.id);
   mqttController.publishDevicePropertiesAndAllProperty(device.id);
+  mqttController.publishDeviceAvailability(device.id, true);
   eventRepository.newEvent(`${device.id}`);
   eventRepository.newEvent(`SYSTEM`);
   eventRepository.newEvent(`LOG`);
@@ -722,6 +723,7 @@ echoNetListController.addDeviceUpdatedEvent((currentDevice:Device, newDevice:Dev
   mqttController.publishDevices();
   mqttController.publishDevice(newDevice.id);
   mqttController.publishDevicePropertiesAndAllProperty(newDevice.id);
+  mqttController.publishDeviceAvailability(newDevice.id, true);
   eventRepository.newEvent(`${newDevice.id}`);
   eventRepository.newEvent(`SYSTEM`);
   eventRepository.newEvent(`LOG`);
@@ -729,7 +731,7 @@ echoNetListController.addDeviceUpdatedEvent((currentDevice:Device, newDevice:Dev
 });
 
 echoNetListController.addPropertyChangedEvent((ip:string, eoj:string, propertyName:string, newValue:any):void =>{
-  
+
   if(newValue === undefined)
   {
     return;
@@ -752,6 +754,32 @@ echoNetListController.addPropertyChangedEvent((ip:string, eoj:string, propertyNa
     logger.output(`[ECHONETLite] prop changed: ${deviceNameText} ${propertyName} ${valueText}`);
     eventRepository.newEvent(`LOG`);
     restApiController.setNewEvent();
+
+    // ノードプロファイルのoperatingStatus変更を検出して死活状態を通知
+    if(propertyName === "operatingStatus" && eoj.toLowerCase().startsWith("0ef0"))
+    {
+      const isOnline = newValue === true || newValue === "true";
+      const devicesInNode = deviceStore.getAll().filter(d => d.ip === ip);
+
+      if(!isOnline)
+      {
+        // ノードが停止した場合、全デバイスの死亡イベントを発火
+        logger.output(`[ECHONETLite] node dead:    ${ip} (${devicesInNode.length} devices affected)`);
+        const eojList = devicesInNode.map(d => d.eoj);
+        echoNetListController.getRawController().fireDeviceDead(ip, eojList);
+        devicesInNode.forEach(d => {
+          mqttController.publishDeviceAvailability(d.id, false);
+        });
+      }
+      else
+      {
+        // ノードが復活した場合、全デバイスのオンラインを通知
+        logger.output(`[ECHONETLite] node alive:   ${ip} (${devicesInNode.length} devices affected)`);
+        devicesInNode.forEach(d => {
+          mqttController.publishDeviceAvailability(d.id, true);
+        });
+      }
+    }
   }
 });
 
