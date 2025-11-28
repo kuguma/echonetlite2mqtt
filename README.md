@@ -177,7 +177,7 @@ ECHONET Lite Options
 | `ECHONET_PROPERTY_REQUEST_RETRY_DELAY` | (none) | Specify the retry interval for property requests. (Unit: ms) (Default: 0) |
 | `ECHONET_PERIODIC_DISCOVERY_INTERVAL_SEC` | `--echonetPeriodicDiscoveryIntervalSec` | Specify the interval for periodic device discovery in seconds. Set to 0 to disable. (Default: 0) |
 | `ECHONET_DISABLE_AUTO_DEVICE_DISCOVERY` | `--echonetDisableAutoDeviceDiscovery` | Disable automatic device discovery. (default: off) |
-| `ECHONET_FRIENDLY_NAME_FILE`   | `--echonetFriendlyNameFile`  | The file path for friendly name option file. (Defalt: (empty)) |
+| `ECHONET_FRIENDLY_NAME_FILE`   | `--echonetFriendlyNameFile`  | The file path for friendly name option file. (Default: (empty)) |
 | `ECHONET_UNKNOWN_AS_ERROR`   | `--echonetUnknownAsError`  | Specifies whether to  treat unknown classes and unknown properties as errors. (Default: off) |
 | `ECHONET_PROPERTY_SYNC_CONFIG_FILE` | `--echonetPropertySyncConfigFile` | Path to the PropertySync configuration file. Enables periodic property polling and device availability monitoring. (Default: empty) |
 | ~~`ECHONET_INTERVAL_TO_GET_PROPERTIES`~~ | ~~`--echonetIntervalToGetProperties`~~ | (Deprecated since v3.0.0) ~~Specifies the time interval for acquiring ECHONET Lite properties. (Unit: ms) (Default: 100)~~ |

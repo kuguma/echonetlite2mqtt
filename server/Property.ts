@@ -166,12 +166,12 @@ export class FriendlyNameOption
       return {valid:false, message:"friendlyNames is not array"};
     }
 
-    const faildValidationResults = friendlyNameOption.friendlyNames
+    const failedValidationResults = friendlyNameOption.friendlyNames
       .map(_=>DeviceFriendlyName.validate(_)).filter(_=>_.valid===false);
-    if(faildValidationResults.length>0)
+    if(failedValidationResults.length>0)
     {
       return {valid:false, 
-        message:faildValidationResults.map(_=>_.message).join("\n")};
+        message:failedValidationResults.map(_=>_.message).join("\n")};
     }
 
     return {valid:true, message:""};
