@@ -39,7 +39,7 @@ import { Logger } from "./Logger";
 
 【シナリオ3: デバイス復活 → GET成功 or INF受信 → birth発火】
   3-A. GET成功パターン:
-    1. PropertySyncManager: 24時間経過後にDEADプロパティのリトライ
+    1. PropertySyncManager: 設定された間隔経過後にDEADプロパティのリトライ
     2. EchoNetLiteController: requestDeviceProperty() でGET成功
     3. EchoNetLiteController: firePropertyChangedEvent() 発火
     4. → デバイス復活トリガー → lifecycleManager.markDeviceAsAlive(device)
