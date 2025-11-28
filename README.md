@@ -179,6 +179,7 @@ ECHONET Lite Options
 | `ECHONET_DISABLE_AUTO_DEVICE_DISCOVERY` | `--echonetDisableAutoDeviceDiscovery` | Disable automatic device discovery. (default: off) |
 | `ECHONET_ALIAS_FILE`   | `--echonetAliasFile`  | The file path for alias option file. (Defalt: (empty)) |
 | `ECHONET_UNKNOWN_AS_ERROR`   | `--echonetUnknownAsError`  | Specifies whether to  treat unknown classes and unknown properties as errors. (Default: off) |
+| `ECHONET_PROPERTY_SYNC_CONFIG_FILE` | `--echonetPropertySyncConfigFile` | Path to the PropertySync configuration file. Enables periodic property polling and device availability monitoring. (Default: empty) |
 | ~~`ECHONET_INTERVAL_TO_GET_PROPERTIES`~~ | ~~`--echonetIntervalToGetProperties`~~ | (Deprecated since v3.0.0) ~~Specifies the time interval for acquiring ECHONET Lite properties. (Unit: ms) (Default: 100)~~ |
 | ~~`ECHONET_ALT_MULTI_NIC_MODE`~~ | ~~`--echonetAltMultiNicMode`~~ | (Deprecated since v3.0.0) ~~Alternate mode in a multiple NIC environment. Specifies if you cannot receive status from the device. (Default: off)~~ |
 
@@ -213,6 +214,57 @@ The Alias ​​Option File is a Json file with the following format:
 
 An alias is selected if all of the ip, eoj, and id conditions are met.
 If there are multiple matches, the first match takes precedence.
+
+### Device Availability (LWT)
+
+echonetlite2mqtt publishes device availability status to MQTT when PropertySync is enabled.
+This can be used as a Last Will and Testament (LWT) equivalent for Home Assistant and other smart home platforms.
+
+**Availability Topic:**
+```
+{mqtt_base_topic}/{device_id}/availability
+```
+
+**Payload:**
+- `online` - Device is responding normally
+- `offline` - Device is not responding
+
+**How it works:**
+
+1. **Birth (online):** Published when:
+   - Device is discovered and initialized
+   - Any property is successfully retrieved (GET response)
+   - Any property notification (INF) is received from the device
+
+2. **Dead (offline):** Published when:
+   - PropertySync detects consecutive GET failures (10+ timeouts with max backoff)
+   - Node profile's `operatingStatus` becomes `false`
+
+**Important Notes:**
+
+- This feature requires `ECHONET_PROPERTY_SYNC_CONFIG_FILE` to be configured for automatic offline detection.
+- Without PropertySync, devices will be marked as `online` when discovered but will not be automatically marked as `offline`.
+- The Web UI also displays the current availability status for each device.
+
+**PropertySync Configuration Example:**
+
+Create a JSON file (e.g., `property_sync_config.json`) and specify it with `ECHONET_PROPERTY_SYNC_CONFIG_FILE`:
+
+```json
+{
+  "syncRules": [
+    { "deviceClass": "nodeProfile", "properties": ["operatingStatus"], "intervalSec": 300, "onDeadRetryIntervalSec": 3600 },
+    { "deviceClass": "*", "properties": ["operationStatus"], "intervalSec": 60, "onDeadRetryIntervalSec": 3600 }
+  ]
+}
+```
+
+| Property | Description |
+|----------|-------------|
+| deviceClass | Target device class name. Use `*` for all devices. |
+| properties | Array of property names to sync. Use `["*"]` for all properties. |
+| intervalSec | Polling interval in seconds. |
+| onDeadRetryIntervalSec | (Optional) Retry interval for DEAD properties. Default: 86400 (24 hours). |
 
 ## How to migrate from version 1.x to version 2.x
 

@@ -7,6 +7,7 @@
           <th scope="col">name</th>
           <th scope="col">type</th>
           <th scope="col">ip</th>
+          <th scope="col">availability</th>
         </tr>
       </thead>
       <tbody>
@@ -33,9 +34,19 @@
 
           for(const device of data.devices)
           {
+            const availabilityState = device.availability?.state || "unknown";
+            const availabilityBadge = availabilityState === "online" ? '<span class="badge bg-success">online</span>'
+              : availabilityState === "offline" ? '<span class="badge bg-danger">offline</span>'
+              : '<span class="badge bg-secondary">unknown</span>';
+
             if($(`#device-${device.id}`).length === 0)
             {
-              $("#deviceListTable tbody").append(`<tr id="device-${device.id}"><th><a href="devices/${device.name}">${device.name}</a></th><td>${device.deviceType}</td><td>${device.ip}</td></tr>`);
+              $("#deviceListTable tbody").append(`<tr id="device-${device.id}"><th><a href="devices/${device.name}">${device.name}</a></th><td>${device.deviceType}</td><td>${device.ip}</td><td id="device-${device.id}-availability">${availabilityBadge}</td></tr>`);
+            }
+            else
+            {
+              // 既存行のavailabilityを更新
+              $(`#device-${device.id}-availability`).html(availabilityBadge);
             }
           }
       });

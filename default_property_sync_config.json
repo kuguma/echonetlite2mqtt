@@ -1,6 +1,8 @@
 {
   "syncRules": [
-    { "deviceClass": "*", "properties": ["operationStatus"], "intervalSec": 5 },
+    { "deviceClass": "nodeProfile", "properties": ["operatingStatus"], "intervalSec": 300, "onDeadRetryIntervalSec": 3600 },
+
+    { "deviceClass": "*", "properties": ["operationStatus"], "intervalSec": 5, "onDeadRetryIntervalSec": 3600 },
     { "deviceClass": "*", "properties": ["consumedCumulativeElectricEnergy"], "intervalSec": 600 },
     { "deviceClass": "*", "properties": ["faultStatus", "faultDescription"], "intervalSec": 3600 },
 

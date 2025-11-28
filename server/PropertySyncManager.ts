@@ -3,9 +3,20 @@ import { Logger } from "./Logger";
 import { DeviceStore } from "./DeviceStore";
 import { Mutex } from "async-mutex";
 import { EchoNetLiteRawController } from "./EchoNetLiteRawController";
+import { DeviceLifecycleManager } from "./DeviceLifecycleManager";
+
+/*
+  ENLデバイスが持つプロパティをブリッジ側で定期的に取得し、最新状態に保つためのクラス。
+  設定ファイルが指定するルールに基づき、特定デバイスクラスの特定プロパティを一定間隔で取得する。
+
+  プロパティの鮮度が保たれない場合、デバイスに対してプロパティ取得リクエストを送信する。
+  取得に失敗した場合は指数関数的バックオフを適用し、最大16倍まで間隔を伸ばす。
+  さらにタイムアウトが10回以上連続して発生し、かつバックオフが最大の場合、そのプロパティを「死亡」状態とし、
+  以降は設定された間隔（onDeadRetryIntervalSec、デフォルト24時間）でリトライを試みる。
+*/
 
 // Constants for property sync behavior
-const DEAD_RETRY_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const DEFAULT_DEAD_RETRY_INTERVAL_SEC = 24 * 60 * 60; // 24 hours (default)
 const MAX_BACKOFF_MULTIPLIER = 16;
 const DEAD_MARK_TIMEOUT_THRESHOLD = 10;
 
@@ -13,6 +24,7 @@ interface SyncRule {
   deviceClass: string;
   properties: string[];
   intervalSec: number;
+  onDeadRetryIntervalSec?: number; // DEADプロパティのリトライ間隔（秒）、未指定時は24時間
 }
 
 interface SyncConfig {
@@ -46,8 +58,16 @@ export class PropertySyncManager {
   private requestDevicePropertyFn?: (id: {id:string, ip:string, eoj:string, internalId:string}, propertyName: string, options?: any) => Promise<void>;
   private readonly syncMutex = new Mutex();
   private rawController?: EchoNetLiteRawController; // デバイス探索完了チェック用
+  private lifecycleManager?: DeviceLifecycleManager; // デバイス死活管理
 
   constructor() {
+  }
+
+  /**
+   * DeviceLifecycleManagerを設定
+   */
+  public setLifecycleManager(lifecycleManager: DeviceLifecycleManager): void {
+    this.lifecycleManager = lifecycleManager;
   }
 
   /**
@@ -97,15 +117,21 @@ export class PropertySyncManager {
         const state = this.getOrCreateState(ip, device.eoj, propName);
         state.intervalSec = rule.intervalSec; // 更新間隔を設定
 
-        // 死亡マークされたプロパティはスキップ（ただし24時間に1回はリトライチャンスを与える）
+        // 死亡マークされたプロパティはスキップ（ただし一定間隔でリトライチャンスを与える）
         if (state.dead) {
+          const deadRetryIntervalSec = rule.onDeadRetryIntervalSec ?? DEFAULT_DEAD_RETRY_INTERVAL_SEC;
+          const deadRetryIntervalMs = deadRetryIntervalSec * 1000;
           const timeSinceLastRetry = now - state.lastDeadRetryAttempt;
 
-          if (timeSinceLastRetry < DEAD_RETRY_INTERVAL_MS) {
-            Logger.debug("[PropertySync]", `${deviceKey} ${propName}: Skipped (marked as DEAD, next retry in ${Math.floor((DEAD_RETRY_INTERVAL_MS - timeSinceLastRetry) / 3600000)}h)`);
+          if (timeSinceLastRetry < deadRetryIntervalMs) {
+            const remainingSec = Math.floor((deadRetryIntervalMs - timeSinceLastRetry) / 1000);
+            const remainingText = remainingSec >= 3600
+              ? `${Math.floor(remainingSec / 3600)}h${Math.floor((remainingSec % 3600) / 60)}m`
+              : `${Math.floor(remainingSec / 60)}m${remainingSec % 60}s`;
+            Logger.debug("[PropertySync]", `${deviceKey} ${propName}: Skipped (marked as DEAD, next retry in ${remainingText})`);
             continue;
           } else {
-            Logger.info("[PropertySync]", `${deviceKey} ${propName}: Retry attempt for DEAD property (24h elapsed)`);
+            Logger.info("[PropertySync]", `${deviceKey} ${propName}: Retry attempt for DEAD property (${deadRetryIntervalSec}s elapsed)`);
             state.lastDeadRetryAttempt = now; // リトライ試行時刻を記録
           }
         }
@@ -180,11 +206,29 @@ export class PropertySyncManager {
 
     // タイムアウトが10回以上かつバックオフ最大なら死亡マーク
     if (state.timeoutCount >= DEAD_MARK_TIMEOUT_THRESHOLD && state.backoffMultiplier >= MAX_BACKOFF_MULTIPLIER) {
+      const wasAlreadyDead = state.dead;
       state.dead = true;
       Logger.warn("[PropertySync]", `${ip}:${eoj} ${propertyName}: Marked as DEAD after ${state.timeoutCount} consecutive failures`);
+
+      // ノードプロファイルのoperatingStatusがDEADになった場合、ノード内の全デバイスの死亡イベントを発火
+      if (!wasAlreadyDead && propertyName === "operatingStatus" && eoj.toLowerCase().startsWith("0ef0")) {
+        this.fireNodeDeadEvent(ip);
+      }
     } else {
       Logger.debug("[PropertySync]", `${ip}:${eoj} ${propertyName}: Failed, backoff increased to ${state.backoffMultiplier}x (timeout count: ${state.timeoutCount})`);
     }
+  }
+
+  /**
+   * ノード死亡イベントを発火（DeviceLifecycleManagerに委譲）
+   */
+  private fireNodeDeadEvent(ip: string): void {
+    if (!this.lifecycleManager) {
+      Logger.warn("[PropertySync]", `${ip}: Cannot fire node dead event (lifecycleManager not available)`);
+      return;
+    }
+
+    this.lifecycleManager.markNodeAsDeadByIp(ip);
   }
 
   /**

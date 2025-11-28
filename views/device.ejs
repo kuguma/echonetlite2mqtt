@@ -20,6 +20,18 @@
         <dd class="col-10" style="margin-bottom: 0px;"><%= device.descriptions.ja %> (en: <%= device.descriptions.en %>)</dd>
         <dt class="col-2" style="margin-bottom: 0px;">mqtt topic</dt>
         <dd class="col-10" style="margin-bottom: 0px;"><%= context.mqttTopic %></dd>
+        <dt class="col-2" style="margin-bottom: 0px;">availability topic</dt>
+        <dd class="col-10" style="margin-bottom: 0px;"><%= context.availability.topic %></dd>
+        <dt class="col-2" style="margin-bottom: 0px;">availability</dt>
+        <dd class="col-10" style="margin-bottom: 0px;">
+          <% if(context.availability.state === "online") { %>
+            <span class="badge bg-success" id="device-availability">online</span>
+          <% } else if(context.availability.state === "offline") { %>
+            <span class="badge bg-danger" id="device-availability">offline</span>
+          <% } else { %>
+            <span class="badge bg-secondary" id="device-availability">unknown</span>
+          <% } %>
+        </dd>
       </dl>
       <h3>All Properties</h3>
       <dl class="row">

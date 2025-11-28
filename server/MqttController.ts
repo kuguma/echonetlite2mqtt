@@ -341,6 +341,27 @@ export class MqttController
     }
   }
 
+  publishDeviceAvailability = (deviceId:string, isOnline:boolean):void =>{
+    if(this.mqttClient===undefined){
+      return;
+    }
+    const foundDevice = this.deviceStore.getFromNameOrId(deviceId);
+    if(foundDevice===undefined){
+      return;
+    }
+
+    const availability = isOnline ? "online" : "offline";
+    this.mqttClient.publish(`${this.baseTopic}/${foundDevice.name}/availability`, availability, {
+      retain:true
+    });
+    if(foundDevice.id !== foundDevice.name)
+    {
+      this.mqttClient.publish(`${this.baseTopic}/${foundDevice.id}/availability`, availability, {
+        retain:true
+      });
+    }
+  }
+
   publishDeviceProperties = (deviceId:string):void =>{
     if(this.mqttClient===undefined){
       return;

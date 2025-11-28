@@ -1075,6 +1075,14 @@ export class EchoNetLiteRawController {
     this.deviceDetectedListeners.forEach(_=>_(ip, eojList));
   }
 
+  private deviceDeadListeners:((ip:string, eojList:string[])=>void)[] = [];
+  public addDeviceDeadEvent = (event:(ip:string, eojList:string[])=>void):void =>{
+    this.deviceDeadListeners.push(event);
+  }
+  public fireDeviceDead = (ip:string, eojList:string[]):void=>{
+    this.deviceDeadListeners.forEach(_=>_(ip, eojList));
+  }
+
   readonly propertyChangedHandlers:((ip:string, eoj:string, epc:string, oldValue:string, newValue:string) => void)[] = [];
   public addPropertyChangedHandler = (event:(ip:string, eoj:string, epc:string, oldValue:string, newValue:string) => void):void =>
   {
